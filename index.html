@@ -348,30 +348,6 @@ function App() {
     );
   }
 
-  // エクスポート
-  const exportData = () => {
-    const data = { beans, budget, exportedAt: new Date().toISOString() };
-    const blob = new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href=url; a.download=`coffee-cellar-${new Date().toISOString().slice(0,10)}.json`; a.click();
-    URL.revokeObjectURL(url);
-  };
-  const importRef = useRef();
-  const importData = (e) => {
-    const file=e.target.files[0]; if(!file) return;
-    const r=new FileReader();
-    r.onload=(ev)=>{
-      try {
-        const data=JSON.parse(ev.target.result);
-        if(data.beans) setBeans(data.beans);
-        if(data.budget) setBudget(data.budget);
-        alert("✅ インポート完了！");
-      } catch { alert("ファイルが正しくありません"); }
-    };
-    r.readAsText(file); e.target.value="";
-  };
-
   // LIST VIEW
   const budgetBarColor=budgetOver?"#E07060":budgetAlert?"#D4A96A":"#8FBE8A";
   return h("div",{style:S.app},
@@ -397,11 +373,6 @@ function App() {
       h("div",{style:{display:"flex",gap:16,margin:"10px 0 14px",fontSize:12,color:"#9B8E82"}},
         h("span",null,`${beans.length}種類 · ${totalGrams}g`),
         totalValue>0&&h("span",null,`在庫価値 ¥${totalValue.toLocaleString()}`)
-      ),
-      h("div",{style:{display:"flex",gap:8,marginBottom:12}},
-        h("button",{onClick:exportData,style:{flex:1,background:"#2C2118",color:"#D4A96A",border:"1px solid #3C3028",borderRadius:10,padding:"8px",fontSize:12,fontFamily:"inherit",cursor:"pointer"}},"⬇ バックアップ保存"),
-        h("button",{onClick:()=>importRef.current.click(),style:{flex:1,background:"#2C2118",color:"#9B8E82",border:"1px solid #3C3028",borderRadius:10,padding:"8px",fontSize:12,fontFamily:"inherit",cursor:"pointer"}},"⬆ バックアップ復元"),
-        h("input",{ref:importRef,type:"file",accept:".json",style:{display:"none"},onChange:importData})
       ),
       h("div",{style:{display:"flex",gap:8,overflowX:"auto",padding:"0 0 12px",scrollbarWidth:"none"}},
         ...["all",...ROAST_LEVELS].map(r=>h("button",{key:r,style:S.chip(filterRoast===r),onClick:()=>setFilterRoast(r)},r==="all"?"すべて":r))
