@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Coffee Cellar">
+  <title>Coffee Cellar</title>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { margin: 0; background: #1A120B; font-family: 'Georgia', serif; }
+    input, select, textarea, button { font-family: inherit; }
+    input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script>
+const { useState, useRef, useEffect, createElement: h } = React;
+
+const ROAST_LEVELS = ["ライト","ミディアム","ミディアムダーク","ダーク"];
+const ROAST_COLORS = {"ライト":"#D4A96A","ミディアム":"#A0714F","ミディアムダーク":"#7B4F2E","ダーク":"#3E1F0A"};
+
+const getCurrentMonth = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; };
+const formatDate = (iso) => { if(!iso) return "—"; const d=new Date(iso); return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}`; };
+const formatMonth = (ym) => { if(!ym) return ""; const [y,m]=ym.split("-"); return `${y}年${Number(m)}月`; };
+const freshnessDays = (r) => r ? Math.floor((Date.now()-new Date(r))/86400000) : null;
+const calcMonthlySpend = (beans,ym) => beans.filter(b=>b.purchasedAt?.startsWith(ym)&&b.price).reduce((s,b)=>s+Number(b.price),0);
+
+function getMonthlyHistory(beans) {
+  return Array.from({length:6},(_,i)=>{
+    const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-(5-i));
+    const ym=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+    return {ym,spend:calcMonthlySpend(beans,ym)};
+  });
+}
+
+function FreshnessBar({roastedAt}) {
+  const days=freshnessDays(roastedAt); if(days===null) return null;
+  const peak=days>=7&&days<=21, stale=days>45;
+  const color=stale?"#8B4513":peak?"#4CAF50":"#D4A96A";
+  return h("div",{style:{marginTop:6}},
+    h("div",{style:{display:"flex",justifyContent:"space-between",fontSize:11,color:"#9B8E82",marginBottom:3}},
+      h("span",null,`焙煎から ${days}日`),
+      h("span",{style:{color}},stale?"飲み頃過ぎ":peak?"飲み頃 ✓":days<7?"ガス抜き中":"良好")
+    ),
+    h("div",{style:{height:4,background:"#2C2118",borderRadius:2,overflow:"hidden"}},
+      h("div",{style:{width:`${Math.min(100,(days/60)*100)}%`,height:"100%",background:color,borderRadius:2}})
+    )
+  );
+}
+
+function GramsBar({grams,maxGrams}) {
+  const pct=Math.min(100,(grams/maxGrams)*100);
+  const color=pct<20?"#E07060":pct<50?"#D4A96A":"#8FBE8A";
+  return h("div",{style:{marginTop:4}},
+    h("div",{style:{height:6,background:"#2C2118",borderRadius:3,overflow:"hidden"}},
+      h("div",{style:{width:`${pct}%`,height:"100%",background:color,borderRadius:3}})
+    ),
+    h("div",{style:{fontSize:12,color,marginTop:3,fontWeight:600}},`${grams}g 残り`)
+  );
+}
+
+function App() {
+  const [beans,setBeans]=useState(()=>{try{return JSON.parse(localStorage.getItem("coffeeInventory")||"[]");}catch{return [];}});
+  const [budget,setBudget]=useState(()=>{try{return JSON.parse(localStorage.getItem("coffeeBudget")||"{}");}catch{return {};}});
+  const [view,setView]=useState("list");
+  const [selected,setSelected]=useState(null);
+  const [consumeAmt,setConsumeAmt]=useState("");
+  const [sortBy,setSortBy]=useState("freshness");
+  const [filterRoast,setFilterRoast]=useState("all");
+  const [budgetForm,setBudgetForm]=useState({monthly:"",alert:"80"});
+  const fileRef=useRef();
+  const [form,setForm]=useState({name:"",origin:"",roaster:"",roastLevel:"ミディアム",grams:"",maxGrams:"",roastedAt:"",purchasedAt:new Date().toISOString().slice(0,10),price:"",pricePerKg:"",notes:"",photo:null});
+
+  useEffect(()=>{try{localStorage.setItem("coffeeInventory",JSON.stringify(beans));}catch{}},[beans]);
+  useEffect(()=>{try{localStorage.setItem("coffeeBudget",JSON.stringify(budget));}catch{}},[budget]);
+
+  const calcPPK=(price,grams)=>price>0&&grams>0?String(Math.round((price/grams)*100)):"";
+  const handlePriceChange=(val)=>setForm(f=>({...f,price:val,pricePerKg:calcPPK(Number(val),Number(f.maxGrams)||Number(f.grams))}));
+  const handleGramsChange=(field,val)=>setForm(f=>({...f,[field]:val,pricePerKg:calcPPK(Number(f.price),Number(val))}));
+
+  const addBean=()=>{
+    if(!form.name||!form.grams) return;
+    setBeans(b=>[{id:Date.now(),...form,grams:Number(form.grams),maxGrams:Number(form.maxGrams)||Number(form.grams),price:Number(form.price)||null,pricePerKg:Number(form.pricePerKg)||null,log:[{date:new Date().toISOString(),action:"追加",amount:Number(form.grams)}]},...b]);
+    setForm({name:"",origin:"",roaster:"",roastLevel:"ミディアム",grams:"",maxGrams:"",roastedAt:"",purchasedAt:new Date().toISOString().slice(0,10),price:"",pricePerKg:"",notes:"",photo:null});
+    setView("list");
+  };
+  const consume=()=>{
+    const amt=Number(consumeAmt); if(!amt||!selected) return;
+    setBeans(b=>b.map(bean=>bean.id===selected.id?{...bean,grams:Math.max(0,bean.grams-amt),log:[...(bean.log||[]),{date:new Date().toISOString(),action:"使用",amount:-amt}]}:bean));
+    setConsumeAmt(""); setView("list");
+  };
+  const deleteBean=(id)=>{setBeans(b=>b.filter(x=>x.id!==id));setView("list");};
+  const saveBudget=()=>{setBudget({monthly:Number(budgetForm.monthly)||0,alert:Number(budgetForm.alert)||80});setView("list");};
+
+  const thisMonth=getCurrentMonth();
+  const thisMonthSpend=calcMonthlySpend(beans,thisMonth);
+  const budgetPct=budget.monthly>0?Math.min(100,(thisMonthSpend/budget.monthly)*100):0;
+  const budgetAlert=budget.monthly>0&&budgetPct>=(budget.alert||80);
+  const budgetOver=budget.monthly>0&&thisMonthSpend>budget.monthly;
+  const totalGrams=beans.reduce((s,b)=>s+b.grams,0);
+  const totalValue=beans.reduce((s,b)=>s+(b.price&&b.maxGrams?Math.round(b.price*(b.grams/b.maxGrams)):0),0);
+
+  const sorted=[...beans]
+    .filter(b=>filterRoast==="all"||b.roastLevel===filterRoast)
+    .sort((a,b)=>{
+      if(sortBy==="freshness") return (freshnessDays(b.roastedAt)||999)-(freshnessDays(a.roastedAt)||999);
+      if(sortBy==="grams") return b.grams-a.grams;
+      if(sortBy==="price") return (b.price||0)-(a.price||0);
+      if(sortBy==="name") return a.name.localeCompare(b.name,"ja");
+      return 0;
+    });
+
+  const S={
+    app:{background:"#1A120B",minHeight:"100vh",color:"#E8DDD4",maxWidth:430,margin:"0 auto",paddingBottom:80},
+    chip:(a)=>({background:a?"#D4A96A":"#2C2118",color:a?"#1A120B":"#9B8E82",border:"none",borderRadius:20,padding:"5px 14px",fontSize:12,fontFamily:"inherit",cursor:"pointer",whiteSpace:"nowrap",fontWeight:a?700:400}),
+    card:{background:"#211510",margin:"8px 16px",borderRadius:14,overflow:"hidden",border:"1px solid #2C2118",display:"flex",cursor:"pointer"},
+    cardImg:{width:90,minHeight:90,objectFit:"cover",background:"#2C2118",flexShrink:0},
+    cardImgPh:{width:90,minHeight:90,background:"#2C2118",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28},
+    cardBody:{padding:"12px 14px",flex:1,minWidth:0},
+    cardName:{fontSize:16,fontWeight:700,color:"#E8DDD4",marginBottom:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},
+    cardMeta:{fontSize:11,color:"#6B5A4E",marginBottom:4},
+    roastDot:(l)=>({display:"inline-block",width:8,height:8,borderRadius:"50%",background:ROAST_COLORS[l]||"#888",marginRight:5}),
+    fab:{position:"fixed",bottom:24,right:24,width:60,height:60,borderRadius:"50%",background:"linear-gradient(135deg,#D4A96A,#A0714F)",color:"#1A120B",fontSize:32,border:"none",cursor:"pointer",boxShadow:"0 4px 20px rgba(212,169,106,0.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100},
+    modal:{position:"fixed",inset:0,background:"#1A120B",zIndex:200,overflowY:"auto"},
+    mHead:{display:"flex",alignItems:"center",padding:"16px 20px",borderBottom:"1px solid #2C2118",position:"sticky",top:0,background:"#1A120B",zIndex:10},
+    back:{background:"none",border:"none",color:"#D4A96A",fontSize:16,cursor:"pointer",padding:"4px 12px 4px 0",fontFamily:"inherit"},
+    mTitle:{fontSize:18,fontWeight:700,color:"#D4A96A",flex:1},
+    lbl:{display:"block",fontSize:11,color:"#6B5A4E",letterSpacing:2,textTransform:"uppercase",marginBottom:6},
+    inp:{width:"100%",background:"#211510",border:"1px solid #2C2118",borderRadius:10,padding:"10px 14px",color:"#E8DDD4",fontSize:15,fontFamily:"inherit",boxSizing:"border-box",outline:"none"},
+    sel:{width:"100%",background:"#211510",border:"1px solid #2C2118",borderRadius:10,padding:"10px 14px",color:"#E8DDD4",fontSize:15,fontFamily:"inherit",boxSizing:"border-box",outline:"none",appearance:"none"},
+    photoArea:{margin:"0 20px 16px",borderRadius:12,overflow:"hidden",border:"2px dashed #2C2118",cursor:"pointer"},
+    primaryBtn:{display:"block",width:"calc(100% - 40px)",margin:"16px 20px",background:"linear-gradient(135deg,#D4A96A,#A0714F)",color:"#1A120B",border:"none",borderRadius:12,padding:"14px",fontSize:16,fontWeight:700,fontFamily:"inherit",cursor:"pointer"},
+    dangerBtn:{display:"block",width:"calc(100% - 40px)",margin:"8px 20px",background:"#2C1510",color:"#E07060",border:"1px solid #5C2518",borderRadius:12,padding:"12px",fontSize:15,fontWeight:600,fontFamily:"inherit",cursor:"pointer"},
+    box:{background:"#211510",borderRadius:10,padding:"10px 14px",border:"1px solid #2C2118"},
+    boxLbl:{fontSize:10,color:"#6B5A4E",letterSpacing:2,textTransform:"uppercase",marginBottom:4},
+    boxVal:{fontSize:16,fontWeight:600,color:"#E8DDD4"},
+    logItem:{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid #2C2118",fontSize:13},
+  };
+
+  // BUDGET VIEW
+  if(view==="budget") {
+    const history=getMonthlyHistory(beans);
+    const maxH=Math.max(...history.map(m=>m.spend),budget.monthly||1,1);
+    const avgSpend=Math.round(history.filter(m=>m.spend>0).reduce((s,m)=>s+m.spend,0)/Math.max(1,history.filter(m=>m.spend>0).length));
+    const thisMonthBeans=beans.filter(b=>b.purchasedAt?.startsWith(thisMonth)&&b.price);
+    return h("div",{style:S.modal},
+      h("div",{style:S.mHead},
+        h("button",{style:S.back,onClick:()=>setView("list")},"← 戻る"),
+        h("span",{style:S.mTitle},"予算管理")
+      ),
+      // 今月サマリー
+      h("div",{style:{margin:"16px 20px",background:budgetOver?"#2C1510":budgetAlert?"#21180A":"#211510",borderRadius:14,padding:"18px",border:`1px solid ${budgetOver?"#5C2518":budgetAlert?"#5C4018":"#2C2118"}`}},
+        h("div",{style:{fontSize:12,color:"#9B8E82",marginBottom:4}},formatMonth(thisMonth)+"の支出"),
+        h("div",{style:{fontSize:36,fontWeight:700,color:budgetOver?"#E07060":budgetAlert?"#D4A96A":"#E8DDD4"}},`¥${thisMonthSpend.toLocaleString()}`),
+        budget.monthly>0?h("div",null,
+          h("div",{style:{fontSize:13,color:"#9B8E82",marginTop:6,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}},
+            h("span",null,`予算 ¥${budget.monthly.toLocaleString()}`),
+            h("span",{style:{color:budgetOver?"#E07060":"#D4A96A",fontWeight:700}},`${budgetPct.toFixed(0)}%使用`),
+            budgetOver&&h("span",{style:{background:"#5C2518",color:"#E07060",padding:"2px 8px",borderRadius:10,fontSize:11}},"⚠ 超過"),
+            budgetAlert&&!budgetOver&&h("span",{style:{background:"#5C4018",color:"#D4A96A",padding:"2px 8px",borderRadius:10,fontSize:11}},`⚠ ${budget.alert}%超え`)
+          ),
+          h("div",{style:{height:8,background:"#2C2118",borderRadius:4,overflow:"hidden",marginTop:12}},
+            h("div",{style:{width:`${budgetPct}%`,height:"100%",background:budgetOver?"#E07060":budgetAlert?"#D4A96A":"#8FBE8A",borderRadius:4}})
+          ),
+          h("div",{style:{display:"flex",justifyContent:"space-between",fontSize:12,color:"#6B5A4E",marginTop:6}},
+            h("span",null,`残り ¥${Math.max(0,budget.monthly-thisMonthSpend).toLocaleString()}`),
+            h("span",null,`平均 ¥${avgSpend.toLocaleString()}/月`)
+          )
+        ):h("div",{style:{fontSize:13,color:"#6B5A4E",marginTop:8}},"下の設定から月額予算を登録できます")
+      ),
+      // グラフ
+      h("div",{style:{margin:"0 20px 16px",background:"#211510",borderRadius:14,padding:"16px 16px 12px",border:"1px solid #2C2118"}},
+        h("div",{style:{fontSize:11,color:"#6B5A4E",letterSpacing:2,textTransform:"uppercase",marginBottom:14}},"過去6ヶ月の支出"),
+        h("div",{style:{display:"flex",alignItems:"flex-end",gap:6,height:110,position:"relative"}},
+          budget.monthly>0&&h("div",{style:{position:"absolute",left:0,right:0,bottom:`${(budget.monthly/maxH)*100}%`,borderTop:"1px dashed #5C4018",pointerEvents:"none"}},
+            h("span",{style:{fontSize:9,color:"#5C4018",position:"absolute",right:0,top:-12}},"予算")
+          ),
+          ...history.map(({ym,spend})=>{
+            const isThis=ym===thisMonth;
+            const over=budget.monthly>0&&spend>budget.monthly;
+            const barColor=over?"#E07060":isThis?"#D4A96A":"#4A3525";
+            const pct=(spend/maxH)*100;
+            return h("div",{key:ym,style:{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4,height:"100%"}},
+              h("div",{style:{flex:1,width:"100%",display:"flex",alignItems:"flex-end"}},
+                h("div",{style:{width:"100%",height:`${Math.max(spend>0?6:2,pct)}%`,background:barColor,borderRadius:"3px 3px 0 0",minHeight:spend>0?6:2}})
+              ),
+              spend>0&&h("div",{style:{fontSize:9,color:isThis?"#D4A96A":"#9B8E82",textAlign:"center"}},`¥${spend>=1000?(spend/1000).toFixed(1)+"k":spend}`),
+              h("div",{style:{fontSize:9,color:isThis?"#D4A96A":"#6B5A4E",fontWeight:isThis?700:400}},ym.slice(5)+"月")
+            );
+          })
+        )
+      ),
+      // 今月購入
+      thisMonthBeans.length>0&&h("div",{style:{margin:"0 20px 16px",background:"#211510",borderRadius:14,padding:"16px",border:"1px solid #2C2118"}},
+        h("div",{style:{fontSize:11,color:"#6B5A4E",letterSpacing:2,textTransform:"uppercase",marginBottom:12}},`今月の購入 (${thisMonthBeans.length}点)`),
+        ...thisMonthBeans.map(b=>h("div",{key:b.id,style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid #2C2118"}},
+          h("div",null,
+            h("div",{style:{fontSize:14,color:"#E8DDD4"}},b.name),
+            h("div",{style:{fontSize:11,color:"#6B5A4E"}},`${b.maxGrams}g${b.pricePerKg?` · ¥${b.pricePerKg}/100g`:""} · ${formatDate(b.purchasedAt)}`)
+          ),
+          h("div",{style:{fontSize:16,fontWeight:700,color:"#D4A96A",flexShrink:0,marginLeft:12}},`¥${Number(b.price).toLocaleString()}`)
+        ))
+      ),
+      // 予算設定
+      h("div",{style:{margin:"0 20px 16px",background:"#211510",borderRadius:14,padding:"16px",border:"1px solid #2C2118"}},
+        h("div",{style:{fontSize:11,color:"#6B5A4E",letterSpacing:2,textTransform:"uppercase",marginBottom:14}},"予算設定"),
+        h("div",{style:{marginBottom:16}},
+          h("label",{style:S.lbl},"月額予算 (円)"),
+          h("input",{style:S.inp,type:"number",placeholder:"例: 5000",value:budgetForm.monthly,onChange:e=>setBudgetForm(f=>({...f,monthly:e.target.value}))})
+        ),
+        h("div",null,
+          h("label",{style:S.lbl},"アラートタイミング"),
+          h("div",{style:{display:"flex",gap:8}},
+            ...[60,70,80,90].map(v=>h("button",{key:v,onClick:()=>setBudgetForm(f=>({...f,alert:String(v)})),style:{...S.chip(String(budgetForm.alert)===String(v)),flex:1}},`${v}%`))
+          )
+        )
+      ),
+      h("button",{style:S.primaryBtn,onClick:saveBudget},"保存する")
+    );
+  }
+
+  // ADD VIEW
+  if(view==="add") return h("div",{style:S.modal},
+    h("div",{style:S.mHead},
+      h("button",{style:S.back,onClick:()=>setView("list")},"← 戻る"),
+      h("span",{style:S.mTitle},"豆を追加")
+    ),
+    h("div",{style:S.photoArea,onClick:()=>fileRef.current.click()},
+      form.photo
+        ?h("img",{src:form.photo,alt:"",style:{width:"100%",height:180,objectFit:"cover",display:"block"}})
+        :h("div",{style:{height:140,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",color:"#4B3C30"}},
+            h("span",{style:{fontSize:40}},"📷"),
+            h("span",{style:{fontSize:13,marginTop:8}},"タップして写真を選択")
+          ),
+      h("input",{ref:fileRef,type:"file",accept:"image/*",style:{display:"none"},onChange:e=>{
+        const f2=e.target.files[0]; if(!f2) return;
+        const r=new FileReader(); r.onload=ev=>setForm(f=>({...f,photo:ev.target.result})); r.readAsDataURL(f2);
+      }})
+    ),
+    h("div",{style:{margin:"0 20px 16px"}},
+      h("label",{style:S.lbl},"豆の名前 *"),
+      h("input",{style:S.inp,placeholder:"例: エチオピア イルガチェフェ",value:form.name,onChange:e=>setForm(f=>({...f,name:e.target.value}))})
+    ),
+    h("div",{style:{margin:"0 20px 16px"}},
+      h("label",{style:S.lbl},"産地"),
+      h("input",{style:S.inp,placeholder:"例: エチオピア",value:form.origin,onChange:e=>setForm(f=>({...f,origin:e.target.value}))})
+    ),
+    h("div",{style:{margin:"0 20px 16px"}},
+      h("label",{style:S.lbl},"ロースター / 購入先"),
+      h("input",{style:S.inp,placeholder:"例: Nonstop Coffee",value:form.roaster,onChange:e=>setForm(f=>({...f,roaster:e.target.value}))})
+    ),
+    h("div",{style:{margin:"0 20px 16px"}},
+      h("label",{style:S.lbl},"焙煎度"),
+      h("select",{style:S.sel,value:form.roastLevel,onChange:e=>setForm(f=>({...f,roastLevel:e.target.value}))},
+        ...ROAST_LEVELS.map(r=>h("option",{key:r},r))
+      )
+    ),
+    h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,margin:"0 20px 16px"}},
+      h("div",null,h("label",{style:S.lbl},"現在の残量 (g) *"),h("input",{style:S.inp,type:"number",placeholder:"200",value:form.grams,onChange:e=>handleGramsChange("grams",e.target.value)})),
+      h("div",null,h("label",{style:S.lbl},"購入量 (g)"),h("input",{style:S.inp,type:"number",placeholder:"200",value:form.maxGrams,onChange:e=>handleGramsChange("maxGrams",e.target.value)}))
+    ),
+    // 価格ブロック
+    h("div",{style:{margin:"0 20px 16px",background:"#1A0E08",borderRadius:12,padding:"14px",border:"1px solid #3C2C1C"}},
+      h("div",{style:{fontSize:11,color:"#D4A96A",letterSpacing:2,textTransform:"uppercase",marginBottom:12}},"💰 価格"),
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:10}},
+        h("div",null,h("label",{style:S.lbl},"購入価格 (円)"),h("input",{style:S.inp,type:"number",placeholder:"1500",value:form.price,onChange:e=>handlePriceChange(e.target.value)})),
+        h("div",null,h("label",{style:S.lbl},"単価 (円/100g)"),h("input",{style:{...S.inp,color:"#D4A96A"},type:"number",placeholder:"自動計算",value:form.pricePerKg,onChange:e=>setForm(f=>({...f,pricePerKg:e.target.value}))}))
+      ),
+      form.price&&(Number(form.maxGrams)||Number(form.grams))
+        ?h("div",{style:{fontSize:12,color:"#9B8E82",background:"#211510",borderRadius:8,padding:"8px 12px",display:"flex",justifyContent:"space-between"}},
+            h("span",null,`100g = ¥${Math.round((Number(form.price)/(Number(form.maxGrams)||Number(form.grams)))*100).toLocaleString()}`),
+            budget.monthly>0&&h("span",{style:{color:Number(form.price)+thisMonthSpend>budget.monthly?"#E07060":"#8FBE8A"}},`残予算 ¥${Math.max(0,budget.monthly-thisMonthSpend).toLocaleString()}`)
+          )
+        :null
+    ),
+    h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,margin:"0 20px 16px"}},
+      h("div",null,h("label",{style:S.lbl},"焙煎日"),h("input",{style:{...S.inp,colorScheme:"dark"},type:"date",value:form.roastedAt,onChange:e=>setForm(f=>({...f,roastedAt:e.target.value}))})),
+      h("div",null,h("label",{style:S.lbl},"購入日"),h("input",{style:{...S.inp,colorScheme:"dark"},type:"date",value:form.purchasedAt,onChange:e=>setForm(f=>({...f,purchasedAt:e.target.value}))}))
+    ),
+    h("div",{style:{margin:"0 20px 16px"}},
+      h("label",{style:S.lbl},"メモ・フレーバーノート"),
+      h("textarea",{style:{...S.inp,height:80,resize:"none"},placeholder:"フルーティ、花のような香り…",value:form.notes,onChange:e=>setForm(f=>({...f,notes:e.target.value}))})
+    ),
+    h("button",{style:S.primaryBtn,onClick:addBean},"追加する")
+  );
+
+  // DETAIL VIEW
+  if(view==="detail"&&selected) {
+    const bean=beans.find(b=>b.id===selected.id)||selected;
+    const php=bean.price&&bean.maxGrams?Math.round((bean.price/bean.maxGrams)*100):null;
+    const rv=bean.price&&bean.maxGrams?Math.round(bean.price*(bean.grams/bean.maxGrams)):null;
+    return h("div",{style:S.modal},
+      h("div",{style:S.mHead},
+        h("button",{style:S.back,onClick:()=>setView("list")},"← 戻る"),
+        h("span",{style:S.mTitle},"詳細")
+      ),
+      bean.photo
+        ?h("img",{src:bean.photo,alt:bean.name,style:{width:"100%",height:220,objectFit:"cover"}})
+        :h("div",{style:{width:"100%",height:140,background:"#211510",display:"flex",alignItems:"center",justifyContent:"center",fontSize:60}},"☕"),
+      h("div",{style:{padding:"16px 20px"}},
+        h("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:4}},
+          h("span",{style:{...S.roastDot(bean.roastLevel)}}),
+          h("span",{style:{fontSize:12,color:"#9B8E82"}},bean.roastLevel+"ロースト")
+        ),
+        h("div",{style:{fontSize:24,fontWeight:700,color:"#E8DDD4",marginBottom:4}},bean.name),
+        h("div",{style:{fontSize:13,color:"#9B8E82",marginBottom:16}},bean.roaster+(bean.origin?` · ${bean.origin}`:"")),
+        h(GramsBar,{grams:bean.grams,maxGrams:bean.maxGrams}),
+        bean.roastedAt&&h(FreshnessBar,{roastedAt:bean.roastedAt}),
+        h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginTop:16}},
+          bean.roastedAt&&h("div",{style:S.box},h("div",{style:S.boxLbl},"焙煎日"),h("div",{style:{...S.boxVal,fontSize:14}},formatDate(bean.roastedAt))),
+          bean.purchasedAt&&h("div",{style:S.box},h("div",{style:S.boxLbl},"購入日"),h("div",{style:{...S.boxVal,fontSize:14}},formatDate(bean.purchasedAt))),
+          bean.price&&h("div",{style:S.box},h("div",{style:S.boxLbl},"購入価格"),h("div",{style:S.boxVal},`¥${Number(bean.price).toLocaleString()}`)),
+          h("div",{style:S.box},h("div",{style:S.boxLbl},"残量"),h("div",{style:S.boxVal},`${bean.grams}g`))
+        ),
+        bean.price&&h("div",{style:{background:"#1A0E08",borderRadius:12,padding:"14px",border:"1px solid #3C2C1C",marginTop:12}},
+          h("div",{style:{fontSize:11,color:"#D4A96A",letterSpacing:2,textTransform:"uppercase",marginBottom:10}},"💰 価格詳細"),
+          h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}},
+            php&&h("div",{style:S.box},h("div",{style:S.boxLbl},"100gあたり"),h("div",{style:{...S.boxVal,color:"#D4A96A"}},`¥${php.toLocaleString()}`)),
+            rv!==null&&h("div",{style:S.box},h("div",{style:S.boxLbl},"残量の価値"),h("div",{style:{...S.boxVal,color:"#8FBE8A"}},`¥${rv.toLocaleString()}`))
+          )
+        ),
+        bean.notes&&h("div",{style:{background:"#211510",borderRadius:10,padding:"12px 14px",border:"1px solid #2C2118",marginTop:12,fontSize:14,color:"#C4B5A8",lineHeight:1.7}},bean.notes),
+        h("div",{style:{background:"#211510",borderRadius:12,padding:"14px",border:"1px solid #2C2118",marginTop:12}},
+          h("div",{style:{fontSize:13,color:"#9B8E82",marginBottom:8}},"使用量を記録"),
+          h("div",{style:{display:"flex",gap:10}},
+            h("input",{style:{...S.inp,flex:1},type:"number",placeholder:"g",value:consumeAmt,onChange:e=>setConsumeAmt(e.target.value)}),
+            h("button",{onClick:consume,style:{background:"#D4A96A",color:"#1A120B",border:"none",borderRadius:10,padding:"10px 20px",fontWeight:700,fontSize:15,fontFamily:"inherit",cursor:"pointer"}},"記録")
+          ),
+          h("div",{style:{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}},
+            ...[10,15,18,20,30].map(g=>h("button",{key:g,onClick:()=>setConsumeAmt(String(g)),style:{background:Number(consumeAmt)===g?"#D4A96A":"#2C2118",color:Number(consumeAmt)===g?"#1A120B":"#9B8E82",border:"none",borderRadius:20,padding:"5px 14px",fontSize:12,fontFamily:"inherit",cursor:"pointer"}},`${g}g`))
+          ),
+          consumeAmt&&php&&h("div",{style:{fontSize:12,color:"#9B8E82",marginTop:8}},`≈ ¥${Math.round(php*Number(consumeAmt)/100).toLocaleString()} 相当`)
+        ),
+        bean.log?.length>0&&h("div",{style:{marginTop:16}},
+          h("div",{style:{fontSize:11,color:"#6B5A4E",letterSpacing:2,textTransform:"uppercase",marginBottom:8}},"使用履歴"),
+          ...[...bean.log].reverse().slice(0,8).map((l,i)=>h("div",{key:i,style:S.logItem},
+            h("span",{style:{color:"#9B8E82"}},formatDate(l.date)),
+            h("span",{style:{color:l.amount<0?"#D4A96A":"#8FBE8A"}},`${l.action} ${Math.abs(l.amount)}g`)
+          ))
+        )
+      ),
+      h("button",{style:S.dangerBtn,onClick:()=>deleteBean(bean.id)},"この豆を削除する")
+    );
+  }
+
+  // LIST VIEW
+  const budgetBarColor=budgetOver?"#E07060":budgetAlert?"#D4A96A":"#8FBE8A";
+  return h("div",{style:S.app},
+    h("div",{style:{background:"linear-gradient(180deg,#0D0805 0%,#1A120B 100%)",padding:"20px 20px 0",borderBottom:"1px solid #2C2118"}},
+      h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
+        h("div",null,
+          h("h1",{style:{fontSize:22,fontWeight:700,letterSpacing:2,color:"#D4A96A",margin:0}},"Coffee Cellar"),
+          h("div",{style:{fontSize:11,color:"#6B5A4E",letterSpacing:3,textTransform:"uppercase",marginTop:2}},"Bean Inventory")
+        ),
+        h("button",{onClick:()=>{setBudgetForm({monthly:String(budget.monthly||""),alert:String(budget.alert||80)});setView("budget");},style:{background:budgetOver?"#2C1510":budgetAlert?"#21180A":"#211510",border:`1px solid ${budgetOver?"#5C2518":budgetAlert?"#5C4018":"#3C3028"}`,borderRadius:12,padding:"8px 14px",cursor:"pointer",textAlign:"right"}},
+          h("div",{style:{fontSize:10,color:"#6B5A4E",textTransform:"uppercase",letterSpacing:1}},"今月支出"),
+          h("div",{style:{fontSize:18,fontWeight:700,color:budgetOver?"#E07060":budgetAlert?"#D4A96A":"#E8DDD4"}},`¥${thisMonthSpend.toLocaleString()}`),
+          budget.monthly>0
+            ?h("div",{style:{fontSize:10,color:budgetOver?"#E07060":"#9B8E82"}},`/ ¥${budget.monthly.toLocaleString()}`)
+            :h("div",{style:{fontSize:10,color:"#4B3C30"}},"予算を設定 →")
+        )
+      ),
+      budget.monthly>0&&h("div",{style:{margin:"10px 0 0"}},
+        h("div",{style:{height:3,background:"#2C2118",borderRadius:2,overflow:"hidden"}},
+          h("div",{style:{width:`${budgetPct}%`,height:"100%",background:budgetBarColor,borderRadius:2}})
+        )
+      ),
+      h("div",{style:{display:"flex",gap:16,margin:"10px 0 14px",fontSize:12,color:"#9B8E82"}},
+        h("span",null,`${beans.length}種類 · ${totalGrams}g`),
+        totalValue>0&&h("span",null,`在庫価値 ¥${totalValue.toLocaleString()}`)
+      ),
+      h("div",{style:{display:"flex",gap:8,overflowX:"auto",padding:"0 0 12px",scrollbarWidth:"none"}},
+        ...["all",...ROAST_LEVELS].map(r=>h("button",{key:r,style:S.chip(filterRoast===r),onClick:()=>setFilterRoast(r)},r==="all"?"すべて":r))
+      )
+    ),
+    h("div",{style:{display:"flex",gap:6,padding:"8px 16px 4px",alignItems:"center"}},
+      h("span",{style:{fontSize:11,color:"#6B5A4E",marginRight:2}},"並び替え:"),
+      ...[["freshness","新鮮度"],["grams","残量"],["price","価格"],["name","名前"]].map(([k,l])=>h("button",{key:k,style:{...S.chip(sortBy===k),padding:"4px 10px"},onClick:()=>setSortBy(k)},l))
+    ),
+    sorted.length===0&&h("div",{style:{textAlign:"center",padding:"60px 20px",color:"#4B3C30"}},
+      h("div",{style:{fontSize:48,marginBottom:16}},"☕"),
+      h("div",{style:{fontSize:16,marginBottom:8}},"豆がまだありません"),
+      h("div",{style:{fontSize:13}},"右下の ＋ から追加しましょう")
+    ),
+    ...sorted.map(bean=>h("div",{key:bean.id,style:S.card,onClick:()=>{setSelected(bean);setView("detail");}},
+      bean.photo
+        ?h("img",{src:bean.photo,alt:bean.name,style:S.cardImg})
+        :h("div",{style:S.cardImgPh},h("span",null,"☕")),
+      h("div",{style:S.cardBody},
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
+          h("div",{style:{display:"flex",alignItems:"center",gap:6}},
+            h("span",{style:S.roastDot(bean.roastLevel)}),
+            h("span",{style:{fontSize:10,color:"#6B5A4E"}},bean.roastLevel)
+          ),
+          bean.price&&h("span",{style:{fontSize:12,color:"#D4A96A",fontWeight:600}},`¥${Number(bean.price).toLocaleString()}`)
+        ),
+        h("div",{style:S.cardName},bean.name),
+        h("div",{style:S.cardMeta},
+          bean.roaster+(bean.origin?` · ${bean.origin}`:""),
+          bean.pricePerKg&&h("span",{style:{color:"#5C4030"}},` · ¥${bean.pricePerKg}/100g`)
+        ),
+        h(GramsBar,{grams:bean.grams,maxGrams:bean.maxGrams}),
+        bean.roastedAt&&h(FreshnessBar,{roastedAt:bean.roastedAt})
+      )
+    )),
+    h("button",{style:S.fab,onClick:()=>setView("add")},"＋")
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+  </script>
+</body>
+</html>
