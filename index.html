@@ -21,6 +21,8 @@
   <script>
 const { useState, useRef, useEffect, createElement: h } = React;
 
+var GAS_URL="https://script.google.com/macros/s/AKfycbwk-ctBZL3nFO6Fw-mgG_B2Kdb_4scsvAWfLK2wJi3mLlvrlFV620GVtvB4_5tcLyXT/exec";
+
 const ROAST_LEVELS = ["ライト","ミディアム","ミディアムダーク","ダーク"];
 const ROAST_COLORS = {"ライト":"#D4A96A","ミディアム":"#A0714F","ミディアムダーク":"#7B4F2E","ダーク":"#3E1F0A"};
 
@@ -86,9 +88,29 @@ function App() {
 
   var fileRef=useRef();
   var importRef=useRef();
+  var syncedRef=useRef(false);
+
+  // 初回起動時にGASからデータを復元
+  useEffect(function(){
+    if(syncedRef.current) return;
+    syncedRef.current=true;
+    fetch(GAS_URL).then(function(r){return r.json();}).then(function(data){
+      if(data.beans&&data.beans.length>0){
+        setBeans(data.beans);
+        if(data.budget) setBudget(data.budget);
+      }
+    }).catch(function(){});
+  },[]);
 
   useEffect(function(){try{localStorage.setItem("coffeeInventory",JSON.stringify(beans));}catch(e){}},[beans]);
   useEffect(function(){try{localStorage.setItem("coffeeBudget",JSON.stringify(budget));}catch(e){}},[budget]);
+
+  // GASへの自動同期（beans変更時）
+  useEffect(function(){
+    if(beans.length===0) return;
+    var data={beans:beans,budget:budget,savedAt:new Date().toISOString()};
+    fetch(GAS_URL,{method:"POST",body:JSON.stringify(data)}).catch(function(){});
+  },[beans]);
 
   function calcPPK(price,grams){return price>0&&grams>0?String(Math.round((price/grams)*100)):"";}
   function handlePriceChange(val){setForm(function(f){return Object.assign({},f,{price:val,pricePerKg:calcPPK(Number(val),Number(f.maxGrams)||Number(f.grams))});});}
