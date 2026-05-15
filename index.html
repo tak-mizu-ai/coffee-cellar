@@ -86,11 +86,14 @@ function App() {
   var formState=useState({name:"",origin:"",roaster:"",roastLevel:"ミディアム",grams:"",maxGrams:"",roastedAt:"",purchasedAt:today,price:"",pricePerKg:"",notes:"",photo:null});
   var form=formState[0]; var setForm=formState[1];
 
+  var editingState=useState(false); var editing=editingState[0]; var setEditing=editingState[1];
+  var editFormState=useState(null); var editForm=editFormState[0]; var setEditForm=editFormState[1];
   var fileRef=useRef();
+  var editFileRef=useRef();
   var importRef=useRef();
   var syncedRef=useRef(false);
 
-  // 初回起動時にGASからデータを復元
+  // 初回起動時にGASからデータを復元（写真はlocalStorageから補完）
   useEffect(function(){
     if(syncedRef.current) return;
     syncedRef.current=true;
@@ -98,7 +101,13 @@ function App() {
       try{
         var data=JSON.parse(text);
         if(data.beans&&data.beans.length>0){
-          setBeans(data.beans);
+          var localBeans=[]; try{localBeans=JSON.parse(localStorage.getItem("coffeeInventory")||"[]");}catch(e){}
+          var photoMap={};
+          localBeans.forEach(function(b){if(b.photo) photoMap[b.id]=b.photo;});
+          var merged=data.beans.map(function(b){
+            return Object.assign({},b,{photo:photoMap[b.id]||null});
+          });
+          setBeans(merged);
           if(data.budget) setBudget(data.budget);
         }
       }catch(e){}
@@ -108,10 +117,13 @@ function App() {
   useEffect(function(){try{localStorage.setItem("coffeeInventory",JSON.stringify(beans));}catch(e){}},[beans]);
   useEffect(function(){try{localStorage.setItem("coffeeBudget",JSON.stringify(budget));}catch(e){}},[budget]);
 
-  // GASへの自動同期（beans変更時）
+  // GASへの自動同期（beans変更時・写真除外）
   useEffect(function(){
     if(beans.length===0) return;
-    var data={beans:beans,budget:budget,savedAt:new Date().toISOString()};
+    var beansNoPhoto=beans.map(function(b){
+      var o=Object.assign({},b); delete o.photo; return o;
+    });
+    var data={beans:beansNoPhoto,budget:budget,savedAt:new Date().toISOString()};
     fetch(GAS_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain"},body:JSON.stringify(data)}).catch(function(){});
   },[beans]);
 
@@ -125,6 +137,15 @@ function App() {
     setBeans(function(b){return[bean].concat(b);});
     setForm({name:"",origin:"",roaster:"",roastLevel:"ミディアム",grams:"",maxGrams:"",roastedAt:"",purchasedAt:new Date().toISOString().slice(0,10),price:"",pricePerKg:"",notes:"",photo:null});
     setView("list");
+  }
+
+  function saveEdit(){
+    if(!editForm||!editForm.name||!editForm.grams) return;
+    setBeans(function(b){return b.map(function(bean){
+      if(bean.id!==editForm.id) return bean;
+      return Object.assign({},bean,editForm,{grams:Number(editForm.grams),maxGrams:Number(editForm.maxGrams)||Number(editForm.grams),price:Number(editForm.price)||null,pricePerKg:Number(editForm.pricePerKg)||null});
+    });});
+    setEditing(false); setEditForm(null);
   }
 
   function consume(){
@@ -330,12 +351,56 @@ function App() {
   );
 
   // ── DETAIL VIEW ──
+  // ── EDIT VIEW ──
+  if(view==="detail"&&selected&&editing&&editForm){
+    var ef=editForm;
+    return h("div",{style:S.modal},
+      h("div",{style:S.mHead},
+        h("button",{style:S.back,onClick:function(){setEditing(false);setEditForm(null);}},"← キャンセル"),
+        h("span",{style:S.mTitle},"編集")
+      ),
+      h("div",{style:S.photoArea,onClick:function(){editFileRef.current.click();}},
+        ef.photo
+          ?h("img",{src:ef.photo,alt:"",style:{width:"100%",height:180,objectFit:"cover",display:"block"}})
+          :h("div",{style:{height:140,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",color:"#4B3C30"}},
+              h("span",{style:{fontSize:40}},"📷"),
+              h("span",{style:{fontSize:13,marginTop:8}},"タップして写真を変更")
+            ),
+        h("input",{ref:editFileRef,type:"file",accept:"image/*",style:{display:"none"},onChange:function(e){
+          var f2=e.target.files[0]; if(!f2) return;
+          var r=new FileReader(); r.onload=function(ev){setEditForm(function(f){return Object.assign({},f,{photo:ev.target.result});});}; r.readAsDataURL(f2);
+        }})
+      ),
+      h("div",{style:{margin:"0 20px 16px"}},h("label",{style:S.lbl},"豆の名前 *"),h("input",{style:S.inp,value:ef.name,onChange:function(e){setEditForm(function(f){return Object.assign({},f,{name:e.target.value});});}})),
+      h("div",{style:{margin:"0 20px 16px"}},h("label",{style:S.lbl},"産地"),h("input",{style:S.inp,value:ef.origin||"",onChange:function(e){setEditForm(function(f){return Object.assign({},f,{origin:e.target.value});});}})),
+      h("div",{style:{margin:"0 20px 16px"}},h("label",{style:S.lbl},"ロースター / 購入先"),h("input",{style:S.inp,value:ef.roaster||"",onChange:function(e){setEditForm(function(f){return Object.assign({},f,{roaster:e.target.value});});}})),
+      h("div",{style:{margin:"0 20px 16px"}},h("label",{style:S.lbl},"焙煎度"),h("select",{style:S.sel,value:ef.roastLevel,onChange:function(e){setEditForm(function(f){return Object.assign({},f,{roastLevel:e.target.value});})}},ROAST_LEVELS.map(function(r){return h("option",{key:r},r);}))),
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,margin:"0 20px 16px"}},
+        h("div",null,h("label",{style:S.lbl},"残量 (g)"),h("input",{style:S.inp,type:"number",value:ef.grams,onChange:function(e){setEditForm(function(f){return Object.assign({},f,{grams:e.target.value});});}})),
+        h("div",null,h("label",{style:S.lbl},"購入量 (g)"),h("input",{style:S.inp,type:"number",value:ef.maxGrams||"",onChange:function(e){setEditForm(function(f){return Object.assign({},f,{maxGrams:e.target.value});});}}))
+      ),
+      h("div",{style:{margin:"0 20px 16px",background:"#1A0E08",borderRadius:12,padding:"14px",border:"1px solid #3C2C1C"}},
+        h("div",{style:{fontSize:11,color:"#D4A96A",letterSpacing:2,textTransform:"uppercase",marginBottom:12}},"💰 価格"),
+        h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}},
+          h("div",null,h("label",{style:S.lbl},"購入価格 (円)"),h("input",{style:S.inp,type:"number",value:ef.price||"",onChange:function(e){setEditForm(function(f){return Object.assign({},f,{price:e.target.value});});}})),
+          h("div",null,h("label",{style:S.lbl},"単価 (円/100g)"),h("input",{style:Object.assign({},S.inp,{color:"#D4A96A"}),type:"number",value:ef.pricePerKg||"",onChange:function(e){setEditForm(function(f){return Object.assign({},f,{pricePerKg:e.target.value});});}}))
+        )
+      ),
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,margin:"0 20px 16px"}},
+        h("div",null,h("label",{style:S.lbl},"焙煎日"),h("input",{style:Object.assign({},S.inp,{colorScheme:"dark"}),type:"date",value:ef.roastedAt||"",onChange:function(e){setEditForm(function(f){return Object.assign({},f,{roastedAt:e.target.value});});}})),
+        h("div",null,h("label",{style:S.lbl},"購入日"),h("input",{style:Object.assign({},S.inp,{colorScheme:"dark"}),type:"date",value:ef.purchasedAt||"",onChange:function(e){setEditForm(function(f){return Object.assign({},f,{purchasedAt:e.target.value});});}}))
+      ),
+      h("div",{style:{margin:"0 20px 16px"}},h("label",{style:S.lbl},"メモ・フレーバーノート"),h("textarea",{style:Object.assign({},S.inp,{height:80,resize:"none"}),value:ef.notes||"",onChange:function(e){setEditForm(function(f){return Object.assign({},f,{notes:e.target.value});});}})),
+      h("button",{style:S.primaryBtn,onClick:saveEdit},"保存する")
+    );
+  }
+
   if(view==="detail"&&selected){
     var bean=beans.find(function(b){return b.id===selected.id;})||selected;
     var php=bean.price&&bean.maxGrams?Math.round((bean.price/bean.maxGrams)*100):null;
     var rv=bean.price&&bean.maxGrams?Math.round(bean.price*(bean.grams/bean.maxGrams)):null;
     return h("div",{style:S.modal},
-      h("div",{style:S.mHead},h("button",{style:S.back,onClick:function(){setView("list");}},"← 戻る"),h("span",{style:S.mTitle},"詳細")),
+      h("div",{style:S.mHead},h("button",{style:S.back,onClick:function(){setView("list");}},"← 戻る"),h("span",{style:S.mTitle},"詳細"),h("button",{style:{background:"none",border:"1px solid #3C3028",borderRadius:8,color:"#D4A96A",padding:"6px 14px",fontSize:13,fontFamily:"inherit",cursor:"pointer"},onClick:function(){setEditForm(Object.assign({},bean));setEditing(true);}},"編集")),
       bean.photo
         ?h("img",{src:bean.photo,alt:bean.name,style:{width:"100%",height:220,objectFit:"cover"}})
         :h("div",{style:{width:"100%",height:140,background:"#211510",display:"flex",alignItems:"center",justifyContent:"center",fontSize:60}},"☕"),
