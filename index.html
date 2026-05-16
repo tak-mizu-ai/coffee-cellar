@@ -8,523 +8,559 @@
   <meta name="apple-mobile-web-app-title" content="Coffee Cellar">
   <title>Coffee Cellar</title>
   <style>
-    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-    body { margin: 0; background: #1A120B; font-family: 'Georgia', serif; }
-    input, select, textarea, button { font-family: inherit; }
-    input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+    *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0;}
+    body{background:#1A120B;font-family:'Georgia',serif;color:#E8DDD4;}
+    input,select,textarea,button{font-family:inherit;}
+    input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
+    ::-webkit-scrollbar{display:none;}
   </style>
 </head>
 <body>
-  <div id="root"></div>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-  <script>
-const { useState, useRef, useEffect, createElement: h } = React;
+<div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script>
+"use strict";
+var h = React.createElement;
+var useState = React.useState;
+var useEffect = React.useEffect;
+var useRef = React.useRef;
 
-var GAS_URL="https://script.google.com/macros/s/AKfycbwk-ctBZL3nFO6Fw-mgG_B2Kdb_4scsvAWfLK2wJi3mLlvrlFV620GVtvB4_5tcLyXT/exec";
+var GAS_URL = "https://script.google.com/macros/s/AKfycbwk-ctBZL3nFO6Fw-mgG_B2Kdb_4scsvAWfLK2wJi3mLlvrlFV620GVtvB4_5tcLyXT/exec";
+var ROAST_LEVELS = ["ライト","ミディアム","ミディアムダーク","ダーク"];
+var ROAST_COLORS = {"ライト":"#D4A96A","ミディアム":"#A0714F","ミディアムダーク":"#7B4F2E","ダーク":"#3E1F0A"};
 
-const ROAST_LEVELS = ["ライト","ミディアム","ミディアムダーク","ダーク"];
-const ROAST_COLORS = {"ライト":"#D4A96A","ミディアム":"#A0714F","ミディアムダーク":"#7B4F2E","ダーク":"#3E1F0A"};
+// ── ユーティリティ ──
+function ym(d){ d=d||new Date(); return d.getFullYear()+"-"+pad(d.getMonth()+1); }
+function pad(n){ return String(n).padStart(2,"0"); }
+function fmtDate(iso){ if(!iso) return "—"; var d=new Date(iso); return d.getFullYear()+"/"+pad(d.getMonth()+1)+"/"+pad(d.getDate()); }
+function fmtMonth(s){ if(!s) return ""; var p=s.split("-"); return p[0]+"年"+Number(p[1])+"月"; }
+function freshDays(r){ return r?Math.floor((Date.now()-new Date(r))/86400000):null; }
+function lsGet(k,def){ try{ return JSON.parse(localStorage.getItem(k)||"null")||def; }catch(e){ return def; } }
+function lsSet(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){} }
 
-const getCurrentMonth = () => { const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"); };
-const formatDate = (iso) => { if(!iso) return "—"; const d=new Date(iso); return d.getFullYear()+"/"+String(d.getMonth()+1).padStart(2,"0")+"/"+String(d.getDate()).padStart(2,"0"); };
-const formatMonth = (ym) => { if(!ym) return ""; const p=ym.split("-"); return p[0]+"年"+Number(p[1])+"月"; };
-const freshnessDays = (r) => r ? Math.floor((Date.now()-new Date(r))/86400000) : null;
-const calcMonthlySpend = (beans,ym) => beans.filter(b=>b.purchasedAt&&b.purchasedAt.indexOf(ym)===0&&b.price).reduce((s,b)=>s+Number(b.price),0);
-
-function getMonthlyHistory(beans) {
-  var result = [];
-  for(var i=5;i>=0;i--) {
-    var d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-i);
-    var ym=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");
-    result.push({ym:ym,spend:calcMonthlySpend(beans,ym)});
-  }
-  return result;
+// GAS同期（写真除外でPOST）
+function gasPost(beans, budget){
+  var beansClean = beans.map(function(b){ var o=Object.assign({},b); delete o.photo; return o; });
+  fetch(GAS_URL, {
+    method:"POST", mode:"no-cors",
+    headers:{"Content-Type":"text/plain"},
+    body: JSON.stringify({beans:beansClean, budget:budget, savedAt:new Date().toISOString()})
+  }).catch(function(){});
 }
 
-function FreshnessBar(props) {
-  var days=freshnessDays(props.roastedAt); if(days===null) return null;
+// GAS読み込み（写真はlsから補完）
+function gasGet(cb){
+  fetch(GAS_URL+"?t="+Date.now())
+    .then(function(r){ return r.text(); })
+    .then(function(text){
+      try{
+        var data = JSON.parse(text);
+        if(data && data.beans && data.beans.length > 0){ cb(data); }
+        else{ cb(null); }
+      }catch(e){ cb(null); }
+    })
+    .catch(function(){ cb(null); });
+}
+
+// ── コンポーネント ──
+function FreshnessBar(props){
+  var days=freshDays(props.r); if(days===null) return null;
   var peak=days>=7&&days<=21, stale=days>45;
-  var color=stale?"#8B4513":peak?"#4CAF50":"#D4A96A";
-  var label=stale?"飲み頃過ぎ":peak?"飲み頃 ✓":days<7?"ガス抜き中":"良好";
+  var c=stale?"#8B4513":peak?"#4CAF50":"#D4A96A";
   return h("div",{style:{marginTop:6}},
     h("div",{style:{display:"flex",justifyContent:"space-between",fontSize:11,color:"#9B8E82",marginBottom:3}},
-      h("span",null,"焙煎から "+days+"日"),
-      h("span",{style:{color:color}},label)
+      h("span",null,"焙煎から"+days+"日"),
+      h("span",{style:{color:c}},stale?"飲み頃過ぎ":peak?"飲み頃✓":days<7?"ガス抜き中":"良好")
     ),
     h("div",{style:{height:4,background:"#2C2118",borderRadius:2,overflow:"hidden"}},
-      h("div",{style:{width:Math.min(100,(days/60)*100)+"%",height:"100%",background:color,borderRadius:2}})
+      h("div",{style:{width:Math.min(100,days/60*100)+"%",height:"100%",background:c,borderRadius:2}})
     )
   );
 }
 
-function GramsBar(props) {
-  var pct=Math.min(100,(props.grams/props.maxGrams)*100);
-  var color=pct<20?"#E07060":pct<50?"#D4A96A":"#8FBE8A";
+function GramsBar(props){
+  var pct=Math.min(100,props.g/props.max*100);
+  var c=pct<20?"#E07060":pct<50?"#D4A96A":"#8FBE8A";
   return h("div",{style:{marginTop:4}},
     h("div",{style:{height:6,background:"#2C2118",borderRadius:3,overflow:"hidden"}},
-      h("div",{style:{width:pct+"%",height:"100%",background:color,borderRadius:3}})
+      h("div",{style:{width:pct+"%",height:"100%",background:c,borderRadius:3}})
     ),
-    h("div",{style:{fontSize:12,color:color,marginTop:3,fontWeight:600}},props.grams+"g 残り")
+    h("div",{style:{fontSize:12,color:c,marginTop:3,fontWeight:600}},props.g+"g 残り")
   );
 }
 
-function App() {
-  var savedBeans=[]; try{savedBeans=JSON.parse(localStorage.getItem("coffeeInventory")||"[]");}catch(e){}
-  var savedBudget={}; try{savedBudget=JSON.parse(localStorage.getItem("coffeeBudget")||"{}");}catch(e){}
+// ── メインアプリ ──
+function App(){
+  var s_beans   = useState(lsGet("cc_beans",[]));   var beans=s_beans[0];   var setBeans=s_beans[1];
+  var s_budget  = useState(lsGet("cc_budget",{}));  var budget=s_budget[0]; var setBudget=s_budget[1];
+  var s_view    = useState("list");                  var view=s_view[0];     var setView=s_view[1];
+  var s_sel     = useState(null);                    var sel=s_sel[0];       var setSel=s_sel[1];
+  var s_loading = useState(true);                    var loading=s_loading[0]; var setLoading=s_loading[1];
+  var s_syncing = useState(false);                   var syncing=s_syncing[0]; var setSyncing=s_syncing[1];
+  var s_msg     = useState("");                      var msg=s_msg[0];       var setMsg=s_msg[1];
 
-  var beanState=useState(savedBeans); var beans=beanState[0]; var setBeans=beanState[1];
-  var budgetState=useState(savedBudget); var budget=budgetState[0]; var setBudget=budgetState[1];
-  var viewState=useState("list"); var view=viewState[0]; var setView=viewState[1];
-  var selState=useState(null); var selected=selState[0]; var setSelected=selState[1];
-  var consumeState=useState(""); var consumeAmt=consumeState[0]; var setConsumeAmt=consumeState[1];
-  var sortState=useState("freshness"); var sortBy=sortState[0]; var setSortBy=sortState[1];
-  var filterState=useState("all"); var filterRoast=filterState[0]; var setFilterRoast=filterState[1];
-  var bfState=useState({monthly:"",alert:"80"}); var budgetForm=bfState[0]; var setBudgetForm=bfState[1];
+  // フォーム
+  var emptyForm = {name:"",origin:"",roaster:"",roastLevel:"ミディアム",grams:"",maxGrams:"",roastedAt:"",purchasedAt:new Date().toISOString().slice(0,10),price:"",pricePerKg:"",notes:"",photo:null};
+  var s_form    = useState(emptyForm);               var form=s_form[0];     var setForm=s_form[1];
+  var s_edit    = useState(null);                    var editForm=s_edit[0]; var setEditForm=s_edit[1];
+  var s_consume = useState("");                      var consume=s_consume[0]; var setConsume=s_consume[1];
+  var s_sort    = useState("freshness");             var sortBy=s_sort[0];   var setSortBy=s_sort[1];
+  var s_filter  = useState("all");                   var filterRoast=s_filter[0]; var setFilterRoast=s_filter[1];
+  var s_bf      = useState({monthly:"",alert:"80"}); var bf=s_bf[0];         var setBf=s_bf[1];
 
-  var today=new Date().toISOString().slice(0,10);
-  var formState=useState({name:"",origin:"",roaster:"",roastLevel:"ミディアム",grams:"",maxGrams:"",roastedAt:"",purchasedAt:today,price:"",pricePerKg:"",notes:"",photo:null});
-  var form=formState[0]; var setForm=formState[1];
+  var fileRef     = useRef();
+  var editFileRef = useRef();
+  var importRef   = useRef();
+  var inited      = useRef(false);
 
-  var editingState=useState(false); var editing=editingState[0]; var setEditing=editingState[1];
-  var editFormState=useState(null); var editForm=editFormState[0]; var setEditForm=editFormState[1];
-  var fileRef=useRef();
-  var editFileRef=useRef();
-  var importRef=useRef();
-  var syncedRef=useRef(false);
-
-  // 初回起動時にGASからデータを復元（写真はlocalStorageから補完）
+  // 初回：GASからロード
   useEffect(function(){
-    if(syncedRef.current) return;
-    syncedRef.current=true;
-    fetch(GAS_URL+"?t="+Date.now()).then(function(r){return r.text();}).then(function(text){
-      try{
-        var data=JSON.parse(text);
-        if(data.beans&&data.beans.length>0){
-          var localBeans=[]; try{localBeans=JSON.parse(localStorage.getItem("coffeeInventory")||"[]");}catch(e){}
-          var photoMap={};
-          localBeans.forEach(function(b){if(b.photo) photoMap[b.id]=b.photo;});
-          var merged=data.beans.map(function(b){
-            return Object.assign({},b,{photo:photoMap[b.id]||null});
-          });
-          setBeans(merged);
-          if(data.budget) setBudget(data.budget);
-        }
-      }catch(e){}
-    }).catch(function(){});
+    if(inited.current) return; inited.current=true;
+    gasGet(function(data){
+      if(data){
+        var local = lsGet("cc_beans",[]);
+        var photoMap = {};
+        local.forEach(function(b){ if(b.photo) photoMap[b.id]=b.photo; });
+        var merged = data.beans.map(function(b){ return Object.assign({},b,{photo:photoMap[b.id]||null}); });
+        setBeans(merged); lsSet("cc_beans",merged);
+        if(data.budget){ setBudget(data.budget); lsSet("cc_budget",data.budget); }
+      }
+      setLoading(false);
+    });
   },[]);
 
-  useEffect(function(){try{localStorage.setItem("coffeeInventory",JSON.stringify(beans));}catch(e){}},[beans]);
-  useEffect(function(){try{localStorage.setItem("coffeeBudget",JSON.stringify(budget));}catch(e){}},[budget]);
+  // beans変更時：ls保存＋GAS同期
+  function saveBeans(newBeans){
+    setBeans(newBeans); lsSet("cc_beans",newBeans);
+    setSyncing(true);
+    gasPost(newBeans, budget);
+    setTimeout(function(){ setSyncing(false); },2000);
+  }
+  function saveBudgetData(newBudget){
+    setBudget(newBudget); lsSet("cc_budget",newBudget);
+    gasPost(beans, newBudget);
+  }
 
-  // GASへの自動同期（beans変更時・写真除外）
-  useEffect(function(){
-    if(beans.length===0) return;
-    var beansNoPhoto=beans.map(function(b){
-      var o=Object.assign({},b); delete o.photo; return o;
-    });
-    var data={beans:beansNoPhoto,budget:budget,savedAt:new Date().toISOString()};
-    fetch(GAS_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain"},body:JSON.stringify(data)}).catch(function(){});
-  },[beans]);
+  // メッセージ表示
+  function showMsg(text){ setMsg(text); setTimeout(function(){ setMsg(""); },2500); }
 
-  function calcPPK(price,grams){return price>0&&grams>0?String(Math.round((price/grams)*100)):"";}
-  function handlePriceChange(val){setForm(function(f){return Object.assign({},f,{price:val,pricePerKg:calcPPK(Number(val),Number(f.maxGrams)||Number(f.grams))});});}
-  function handleGramsChange(field,val){setForm(function(f){var o=Object.assign({},f);o[field]=val;o.pricePerKg=calcPPK(Number(f.price),Number(val));return o;});}
-
+  // 豆追加
   function addBean(){
-    if(!form.name||!form.grams) return;
-    var bean=Object.assign({},form,{id:Date.now(),grams:Number(form.grams),maxGrams:Number(form.maxGrams)||Number(form.grams),price:Number(form.price)||null,pricePerKg:Number(form.pricePerKg)||null,log:[{date:new Date().toISOString(),action:"追加",amount:Number(form.grams)}]});
-    setBeans(function(b){return[bean].concat(b);});
-    setForm({name:"",origin:"",roaster:"",roastLevel:"ミディアム",grams:"",maxGrams:"",roastedAt:"",purchasedAt:new Date().toISOString().slice(0,10),price:"",pricePerKg:"",notes:"",photo:null});
+    if(!form.name||!form.grams){ showMsg("名前と残量は必須です"); return; }
+    var bean = Object.assign({},form,{
+      id: Date.now(),
+      grams: Number(form.grams),
+      maxGrams: Number(form.maxGrams)||Number(form.grams),
+      price: Number(form.price)||null,
+      pricePerKg: Number(form.pricePerKg)||null,
+      log:[{date:new Date().toISOString(),action:"追加",amount:Number(form.grams)}]
+    });
+    saveBeans([bean].concat(beans));
+    setForm(emptyForm); setView("list"); showMsg("追加しました☕");
+  }
+
+  // 豆編集保存
+  function saveEdit(){
+    if(!editForm||!editForm.name||!editForm.grams){ showMsg("名前と残量は必須です"); return; }
+    var newBeans = beans.map(function(b){
+      if(b.id!==editForm.id) return b;
+      return Object.assign({},b,editForm,{
+        grams:Number(editForm.grams), maxGrams:Number(editForm.maxGrams)||Number(editForm.grams),
+        price:Number(editForm.price)||null, pricePerKg:Number(editForm.pricePerKg)||null
+      });
+    });
+    saveBeans(newBeans); setEditForm(null); setView("detail"); showMsg("更新しました");
+  }
+
+  // 使用記録
+  function recordConsume(){
+    var amt=Number(consume); if(!amt||!sel) return;
+    var newBeans=beans.map(function(b){
+      if(b.id!==sel.id) return b;
+      var log=(b.log||[]).concat([{date:new Date().toISOString(),action:"使用",amount:-amt}]);
+      return Object.assign({},b,{grams:Math.max(0,b.grams-amt),log:log});
+    });
+    saveBeans(newBeans);
+    var updated=newBeans.find(function(b){return b.id===sel.id;});
+    setSel(updated); setConsume(""); showMsg(amt+"g 記録しました");
+  }
+
+  // 豆削除
+  function deleteBean(id){
+    if(!confirm("この豆を削除しますか？")) return;
+    saveBeans(beans.filter(function(b){return b.id!==id;}));
     setView("list");
   }
 
-  function saveEdit(){
-    if(!editForm||!editForm.name||!editForm.grams) return;
-    setBeans(function(b){return b.map(function(bean){
-      if(bean.id!==editForm.id) return bean;
-      return Object.assign({},bean,editForm,{grams:Number(editForm.grams),maxGrams:Number(editForm.maxGrams)||Number(editForm.grams),price:Number(editForm.price)||null,pricePerKg:Number(editForm.pricePerKg)||null});
-    });});
-    setEditing(false); setEditForm(null);
-  }
-
-  function consume(){
-    var amt=Number(consumeAmt); if(!amt||!selected) return;
-    setBeans(function(b){return b.map(function(bean){
-      if(bean.id!==selected.id) return bean;
-      var log=(bean.log||[]).concat([{date:new Date().toISOString(),action:"使用",amount:-amt}]);
-      return Object.assign({},bean,{grams:Math.max(0,bean.grams-amt),log:log});
-    });});
-    setConsumeAmt(""); setView("list");
-  }
-
-  function deleteBean(id){setBeans(function(b){return b.filter(function(x){return x.id!==id;});});setView("list");}
-
-  function saveBudget(){setBudget({monthly:Number(budgetForm.monthly)||0,alert:Number(budgetForm.alert)||80});setView("list");}
-
-  function exportData(){
+  // エクスポート
+  function doExport(){
     var data={beans:beans,budget:budget,exportedAt:new Date().toISOString()};
     var blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
     var url=URL.createObjectURL(blob);
-    var a=document.createElement("a");
-    a.href=url;
+    var a=document.createElement("a"); a.href=url;
     a.download="coffee-cellar-"+new Date().toISOString().slice(0,10)+".json";
-    a.click();
-    URL.revokeObjectURL(url);
+    a.click(); URL.revokeObjectURL(url);
+    showMsg("保存しました");
   }
 
-  function importData(e){
+  // インポート
+  function doImport(e){
     var file=e.target.files[0]; if(!file) return;
     var r=new FileReader();
     r.onload=function(ev){
       try{
         var data=JSON.parse(ev.target.result);
-        if(data.beans) setBeans(data.beans);
-        if(data.budget) setBudget(data.budget);
-        alert("✅ インポート完了！");
-      }catch(err){alert("ファイルが正しくありません");}
+        if(data.beans){ saveBeans(data.beans); }
+        if(data.budget){ saveBudgetData(data.budget); }
+        showMsg("✅ 復元しました");
+      }catch(err){ showMsg("ファイルエラー"); }
     };
-    r.readAsText(file);
-    e.target.value="";
+    r.readAsText(file); e.target.value="";
   }
 
-  var thisMonth=getCurrentMonth();
-  var thisMonthSpend=calcMonthlySpend(beans,thisMonth);
-  var budgetPct=budget.monthly>0?Math.min(100,(thisMonthSpend/budget.monthly)*100):0;
-  var budgetAlert=budget.monthly>0&&budgetPct>=(budget.alert||80);
-  var budgetOver=budget.monthly>0&&thisMonthSpend>budget.monthly;
-  var totalGrams=beans.reduce(function(s,b){return s+b.grams;},0);
-  var totalValue=beans.reduce(function(s,b){return s+(b.price&&b.maxGrams?Math.round(b.price*(b.grams/b.maxGrams)):0);},0);
+  // 価格自動計算
+  function ppk(price,grams){ return price>0&&grams>0?Math.round(price/grams*100):null; }
+  function setPrice(val,f,setF){
+    var p=Number(val), g=Number(f.maxGrams)||Number(f.grams);
+    var pk=ppk(p,g); setF(Object.assign({},f,{price:val,pricePerKg:pk?String(pk):""}));
+  }
+  function setGrams(field,val,f,setF){
+    var g=Number(val), p=Number(f.price);
+    var pk=ppk(p,g); setF(Object.assign({},f,{[field]:val,pricePerKg:pk?String(pk):f.pricePerKg}));
+  }
 
+  // 予算計算
+  var thisMonth = ym();
+  var thisSpend = beans.filter(function(b){return b.purchasedAt&&b.purchasedAt.indexOf(thisMonth)===0&&b.price;}).reduce(function(s,b){return s+Number(b.price);},0);
+  var bPct = budget.monthly>0?Math.min(100,thisSpend/budget.monthly*100):0;
+  var bAlert = budget.monthly>0&&bPct>=(budget.alert||80);
+  var bOver  = budget.monthly>0&&thisSpend>budget.monthly;
+  var totalG = beans.reduce(function(s,b){return s+b.grams;},0);
+  var totalV = beans.reduce(function(s,b){return s+(b.price&&b.maxGrams?Math.round(b.price*(b.grams/b.maxGrams)):0);},0);
+
+  // 月次履歴
+  var monthHistory = (function(){
+    var arr=[];
+    for(var i=5;i>=0;i--){
+      var d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-i);
+      var m=ym(d);
+      var spend=beans.filter(function(b){return b.purchasedAt&&b.purchasedAt.indexOf(m)===0&&b.price;}).reduce(function(s,b){return s+Number(b.price);},0);
+      arr.push({m:m,spend:spend});
+    }
+    return arr;
+  })();
+  var maxH=Math.max.apply(null,monthHistory.map(function(x){return x.spend;}).concat([budget.monthly||1,1]));
+
+  // ソート・フィルター
   var sorted=beans.filter(function(b){return filterRoast==="all"||b.roastLevel===filterRoast;}).slice().sort(function(a,b){
-    if(sortBy==="freshness") return (freshnessDays(b.roastedAt)||999)-(freshnessDays(a.roastedAt)||999);
+    if(sortBy==="freshness") return (freshDays(b.roastedAt)||999)-(freshDays(a.roastedAt)||999);
     if(sortBy==="grams") return b.grams-a.grams;
     if(sortBy==="price") return (b.price||0)-(a.price||0);
-    if(sortBy==="name") return a.name.localeCompare(b.name,"ja");
-    return 0;
+    return a.name.localeCompare(b.name,"ja");
   });
 
-  var S={
-    app:{background:"#1A120B",minHeight:"100vh",color:"#E8DDD4",maxWidth:430,margin:"0 auto",paddingBottom:80},
-    chip:function(a){return{background:a?"#D4A96A":"#2C2118",color:a?"#1A120B":"#9B8E82",border:"none",borderRadius:20,padding:"5px 14px",fontSize:12,fontFamily:"inherit",cursor:"pointer",whiteSpace:"nowrap",fontWeight:a?700:400};},
-    card:{background:"#211510",margin:"8px 16px",borderRadius:14,overflow:"hidden",border:"1px solid #2C2118",display:"flex",cursor:"pointer"},
-    cardImg:{width:90,minHeight:90,objectFit:"cover",background:"#2C2118",flexShrink:0},
-    cardImgPh:{width:90,minHeight:90,background:"#2C2118",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28},
-    cardBody:{padding:"12px 14px",flex:1,minWidth:0},
-    cardName:{fontSize:16,fontWeight:700,color:"#E8DDD4",marginBottom:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},
-    cardMeta:{fontSize:11,color:"#6B5A4E",marginBottom:4},
-    roastDot:function(l){return{display:"inline-block",width:8,height:8,borderRadius:"50%",background:ROAST_COLORS[l]||"#888",marginRight:5};},
-    fab:{position:"fixed",bottom:24,right:24,width:60,height:60,borderRadius:"50%",background:"linear-gradient(135deg,#D4A96A,#A0714F)",color:"#1A120B",fontSize:32,border:"none",cursor:"pointer",boxShadow:"0 4px 20px rgba(212,169,106,0.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100},
-    modal:{position:"fixed",inset:0,background:"#1A120B",zIndex:200,overflowY:"auto"},
-    mHead:{display:"flex",alignItems:"center",padding:"16px 20px",borderBottom:"1px solid #2C2118",position:"sticky",top:0,background:"#1A120B",zIndex:10},
-    back:{background:"none",border:"none",color:"#D4A96A",fontSize:16,cursor:"pointer",padding:"4px 12px 4px 0",fontFamily:"inherit"},
-    mTitle:{fontSize:18,fontWeight:700,color:"#D4A96A",flex:1},
-    lbl:{display:"block",fontSize:11,color:"#6B5A4E",letterSpacing:2,textTransform:"uppercase",marginBottom:6},
-    inp:{width:"100%",background:"#211510",border:"1px solid #2C2118",borderRadius:10,padding:"10px 14px",color:"#E8DDD4",fontSize:15,fontFamily:"inherit",boxSizing:"border-box",outline:"none"},
-    sel:{width:"100%",background:"#211510",border:"1px solid #2C2118",borderRadius:10,padding:"10px 14px",color:"#E8DDD4",fontSize:15,fontFamily:"inherit",boxSizing:"border-box",outline:"none",appearance:"none"},
-    photoArea:{margin:"0 20px 16px",borderRadius:12,overflow:"hidden",border:"2px dashed #2C2118",cursor:"pointer"},
-    primaryBtn:{display:"block",width:"calc(100% - 40px)",margin:"16px 20px",background:"linear-gradient(135deg,#D4A96A,#A0714F)",color:"#1A120B",border:"none",borderRadius:12,padding:"14px",fontSize:16,fontWeight:700,fontFamily:"inherit",cursor:"pointer"},
-    dangerBtn:{display:"block",width:"calc(100% - 40px)",margin:"8px 20px",background:"#2C1510",color:"#E07060",border:"1px solid #5C2518",borderRadius:12,padding:"12px",fontSize:15,fontWeight:600,fontFamily:"inherit",cursor:"pointer"},
-    box:{background:"#211510",borderRadius:10,padding:"10px 14px",border:"1px solid #2C2118"},
-    boxLbl:{fontSize:10,color:"#6B5A4E",letterSpacing:2,textTransform:"uppercase",marginBottom:4},
-    boxVal:{fontSize:16,fontWeight:600,color:"#E8DDD4"},
-    logItem:{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid #2C2118",fontSize:13},
+  // ── スタイル定義 ──
+  var C={
+    bg:"#1A120B", bg2:"#211510", bg3:"#2C2118", bg4:"#1A0E08",
+    gold:"#D4A96A", brown:"#A0714F", red:"#E07060", green:"#8FBE8A",
+    text:"#E8DDD4", muted:"#9B8E82", dim:"#6B5A4E",
   };
+  function chip(active){ return {background:active?C.gold:C.bg3,color:active?"#1A120B":C.muted,border:"none",borderRadius:20,padding:"5px 14px",fontSize:12,fontFamily:"inherit",cursor:"pointer",whiteSpace:"nowrap",fontWeight:active?700:400}; }
+  var inp={width:"100%",background:C.bg2,border:"1px solid "+C.bg3,borderRadius:10,padding:"10px 14px",color:C.text,fontSize:15,fontFamily:"inherit",boxSizing:"border-box",outline:"none"};
+  var sel=Object.assign({},inp,{appearance:"none"});
+  var mHead={display:"flex",alignItems:"center",padding:"16px 20px",borderBottom:"1px solid "+C.bg3,position:"sticky",top:0,background:C.bg,zIndex:10};
+  var backBtn={background:"none",border:"none",color:C.gold,fontSize:16,cursor:"pointer",padding:"4px 12px 4px 0",fontFamily:"inherit"};
+  var primaryBtn={display:"block",width:"calc(100% - 40px)",margin:"16px 20px",background:"linear-gradient(135deg,"+C.gold+","+C.brown+")",color:"#1A120B",border:"none",borderRadius:12,padding:"14px",fontSize:16,fontWeight:700,fontFamily:"inherit",cursor:"pointer"};
+  var dangerBtn={display:"block",width:"calc(100% - 40px)",margin:"8px 20px",background:"#2C1510",color:C.red,border:"1px solid #5C2518",borderRadius:12,padding:"12px",fontSize:15,fontWeight:600,fontFamily:"inherit",cursor:"pointer"};
+  var box={background:C.bg2,borderRadius:10,padding:"10px 14px",border:"1px solid "+C.bg3};
+  var lbl={display:"block",fontSize:11,color:C.dim,letterSpacing:2,textTransform:"uppercase",marginBottom:6};
 
-  // ── BUDGET VIEW ──
-  if(view==="budget"){
-    var history=getMonthlyHistory(beans);
-    var maxH=Math.max.apply(null,history.map(function(m){return m.spend;}).concat([budget.monthly||1,1]));
-    var validMonths=history.filter(function(m){return m.spend>0;});
-    var avgSpend=validMonths.length>0?Math.round(validMonths.reduce(function(s,m){return s+m.spend;},0)/validMonths.length):0;
-    var thisMonthBeans=beans.filter(function(b){return b.purchasedAt&&b.purchasedAt.indexOf(thisMonth)===0&&b.price;});
-    return h("div",{style:S.modal},
-      h("div",{style:S.mHead},h("button",{style:S.back,onClick:function(){setView("list");}},"← 戻る"),h("span",{style:S.mTitle},"予算管理")),
-      h("div",{style:{margin:"16px 20px",background:budgetOver?"#2C1510":budgetAlert?"#21180A":"#211510",borderRadius:14,padding:"18px",border:"1px solid "+(budgetOver?"#5C2518":budgetAlert?"#5C4018":"#2C2118")}},
-        h("div",{style:{fontSize:12,color:"#9B8E82",marginBottom:4}},formatMonth(thisMonth)+"の支出"),
-        h("div",{style:{fontSize:36,fontWeight:700,color:budgetOver?"#E07060":budgetAlert?"#D4A96A":"#E8DDD4"}},"¥"+thisMonthSpend.toLocaleString()),
-        budget.monthly>0?h("div",null,
-          h("div",{style:{fontSize:13,color:"#9B8E82",marginTop:6}},"予算 ¥"+budget.monthly.toLocaleString()+" に対して "+budgetPct.toFixed(0)+"% 使用"+(budgetOver?" ⚠ 超過":budgetAlert?" ⚠ アラート":"")),
-          h("div",{style:{height:8,background:"#2C2118",borderRadius:4,overflow:"hidden",marginTop:10}},
-            h("div",{style:{width:budgetPct+"%",height:"100%",background:budgetOver?"#E07060":budgetAlert?"#D4A96A":"#8FBE8A",borderRadius:4}})
-          ),
-          h("div",{style:{display:"flex",justifyContent:"space-between",fontSize:12,color:"#6B5A4E",marginTop:6}},
-            h("span",null,"残り ¥"+Math.max(0,budget.monthly-thisMonthSpend).toLocaleString()),
-            h("span",null,"平均 ¥"+avgSpend.toLocaleString()+"/月")
-          )
-        ):h("div",{style:{fontSize:13,color:"#6B5A4E",marginTop:8}},"下の設定から月額予算を登録できます")
-      ),
-      h("div",{style:{margin:"0 20px 16px",background:"#211510",borderRadius:14,padding:"16px",border:"1px solid #2C2118"}},
-        h("div",{style:{fontSize:11,color:"#6B5A4E",letterSpacing:2,textTransform:"uppercase",marginBottom:14}},"過去6ヶ月の支出"),
-        h("div",{style:{display:"flex",alignItems:"flex-end",gap:6,height:110,position:"relative"}},
-          budget.monthly>0&&h("div",{style:{position:"absolute",left:0,right:0,bottom:(budget.monthly/maxH)*100+"%",borderTop:"1px dashed #5C4018"}},
-            h("span",{style:{fontSize:9,color:"#5C4018",position:"absolute",right:0,top:-12}},"予算")
-          ),
-          history.map(function(item){
-            var isThis=item.ym===thisMonth;
-            var over=budget.monthly>0&&item.spend>budget.monthly;
-            var barColor=over?"#E07060":isThis?"#D4A96A":"#4A3525";
-            var pct=(item.spend/maxH)*100;
-            return h("div",{key:item.ym,style:{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4,height:"100%"}},
-              h("div",{style:{flex:1,width:"100%",display:"flex",alignItems:"flex-end"}},
-                h("div",{style:{width:"100%",height:Math.max(item.spend>0?6:2,pct)+"%",background:barColor,borderRadius:"3px 3px 0 0"}})
-              ),
-              item.spend>0&&h("div",{style:{fontSize:9,color:isThis?"#D4A96A":"#9B8E82",textAlign:"center"}},"¥"+(item.spend>=1000?(item.spend/1000).toFixed(1)+"k":item.spend)),
-              h("div",{style:{fontSize:9,color:isThis?"#D4A96A":"#6B5A4E",fontWeight:isThis?700:400}},item.ym.slice(5)+"月")
-            );
-          })
-        )
-      ),
-      thisMonthBeans.length>0&&h("div",{style:{margin:"0 20px 16px",background:"#211510",borderRadius:14,padding:"16px",border:"1px solid #2C2118"}},
-        h("div",{style:{fontSize:11,color:"#6B5A4E",letterSpacing:2,textTransform:"uppercase",marginBottom:12}},"今月の購入 ("+thisMonthBeans.length+"点)"),
-        thisMonthBeans.map(function(b){
-          return h("div",{key:b.id,style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid #2C2118"}},
-            h("div",null,
-              h("div",{style:{fontSize:14,color:"#E8DDD4"}},b.name),
-              h("div",{style:{fontSize:11,color:"#6B5A4E"}},b.maxGrams+"g"+(b.pricePerKg?" · ¥"+b.pricePerKg+"/100g":"")+" · "+formatDate(b.purchasedAt))
-            ),
-            h("div",{style:{fontSize:16,fontWeight:700,color:"#D4A96A",flexShrink:0,marginLeft:12}},"¥"+Number(b.price).toLocaleString())
-          );
-        })
-      ),
-      h("div",{style:{margin:"0 20px 16px",background:"#211510",borderRadius:14,padding:"16px",border:"1px solid #2C2118"}},
-        h("div",{style:{fontSize:11,color:"#6B5A4E",letterSpacing:2,textTransform:"uppercase",marginBottom:14}},"予算設定"),
-        h("div",{style:{marginBottom:16}},
-          h("label",{style:S.lbl},"月額予算 (円)"),
-          h("input",{style:S.inp,type:"number",placeholder:"例: 5000",value:budgetForm.monthly,onChange:function(e){setBudgetForm(function(f){return Object.assign({},f,{monthly:e.target.value});});}})
-        ),
-        h("div",null,
-          h("label",{style:S.lbl},"アラートタイミング"),
-          h("div",{style:{display:"flex",gap:8}},
-            [60,70,80,90].map(function(v){
-              return h("button",{key:v,onClick:function(){setBudgetForm(function(f){return Object.assign({},f,{alert:String(v)});});},style:Object.assign({},S.chip(String(budgetForm.alert)===String(v)),{flex:1})},v+"%");
-            })
-          )
-        )
-      ),
-      h("button",{style:S.primaryBtn,onClick:saveBudget},"保存する")
-    );
-  }
-
-  // ── ADD VIEW ──
-  if(view==="add") return h("div",{style:S.modal},
-    h("div",{style:S.mHead},h("button",{style:S.back,onClick:function(){setView("list");}},"← 戻る"),h("span",{style:S.mTitle},"豆を追加")),
-    h("div",{style:S.photoArea,onClick:function(){fileRef.current.click();}},
-      form.photo
-        ?h("img",{src:form.photo,alt:"",style:{width:"100%",height:180,objectFit:"cover",display:"block"}})
-        :h("div",{style:{height:140,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",color:"#4B3C30"}},
-            h("span",{style:{fontSize:40}},"📷"),
-            h("span",{style:{fontSize:13,marginTop:8}},"タップして写真を選択")
-          ),
-      h("input",{ref:fileRef,type:"file",accept:"image/*",style:{display:"none"},onChange:function(e){
-        var f2=e.target.files[0]; if(!f2) return;
-        var r=new FileReader(); r.onload=function(ev){setForm(function(f){return Object.assign({},f,{photo:ev.target.result});});}; r.readAsDataURL(f2);
-      }})
-    ),
-    h("div",{style:{margin:"0 20px 16px"}},h("label",{style:S.lbl},"豆の名前 *"),h("input",{style:S.inp,placeholder:"例: エチオピア イルガチェフェ",value:form.name,onChange:function(e){setForm(function(f){return Object.assign({},f,{name:e.target.value});});}})),
-    h("div",{style:{margin:"0 20px 16px"}},h("label",{style:S.lbl},"産地"),h("input",{style:S.inp,placeholder:"例: エチオピア",value:form.origin,onChange:function(e){setForm(function(f){return Object.assign({},f,{origin:e.target.value});});}})),
-    h("div",{style:{margin:"0 20px 16px"}},h("label",{style:S.lbl},"ロースター / 購入先"),h("input",{style:S.inp,placeholder:"例: Nonstop Coffee",value:form.roaster,onChange:function(e){setForm(function(f){return Object.assign({},f,{roaster:e.target.value});});}})),
-    h("div",{style:{margin:"0 20px 16px"}},h("label",{style:S.lbl},"焙煎度"),h("select",{style:S.sel,value:form.roastLevel,onChange:function(e){setForm(function(f){return Object.assign({},f,{roastLevel:e.target.value});});}},ROAST_LEVELS.map(function(r){return h("option",{key:r},r);}))),
-    h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,margin:"0 20px 16px"}},
-      h("div",null,h("label",{style:S.lbl},"現在の残量 (g) *"),h("input",{style:S.inp,type:"number",placeholder:"200",value:form.grams,onChange:function(e){handleGramsChange("grams",e.target.value);}})),
-      h("div",null,h("label",{style:S.lbl},"購入量 (g)"),h("input",{style:S.inp,type:"number",placeholder:"200",value:form.maxGrams,onChange:function(e){handleGramsChange("maxGrams",e.target.value);}}))
-    ),
-    h("div",{style:{margin:"0 20px 16px",background:"#1A0E08",borderRadius:12,padding:"14px",border:"1px solid #3C2C1C"}},
-      h("div",{style:{fontSize:11,color:"#D4A96A",letterSpacing:2,textTransform:"uppercase",marginBottom:12}},"💰 価格"),
-      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:10}},
-        h("div",null,h("label",{style:S.lbl},"購入価格 (円)"),h("input",{style:S.inp,type:"number",placeholder:"1500",value:form.price,onChange:function(e){handlePriceChange(e.target.value);}})),
-        h("div",null,h("label",{style:S.lbl},"単価 (円/100g)"),h("input",{style:Object.assign({},S.inp,{color:"#D4A96A"}),type:"number",placeholder:"自動計算",value:form.pricePerKg,onChange:function(e){setForm(function(f){return Object.assign({},f,{pricePerKg:e.target.value});});}}))
-      ),
-      form.price&&(Number(form.maxGrams)||Number(form.grams))
-        ?h("div",{style:{fontSize:12,color:"#9B8E82",background:"#211510",borderRadius:8,padding:"8px 12px",display:"flex",justifyContent:"space-between"}},
-            h("span",null,"100g = ¥"+Math.round((Number(form.price)/(Number(form.maxGrams)||Number(form.grams)))*100).toLocaleString()),
-            budget.monthly>0&&h("span",{style:{color:Number(form.price)+thisMonthSpend>budget.monthly?"#E07060":"#8FBE8A"}},"残予算 ¥"+Math.max(0,budget.monthly-thisMonthSpend).toLocaleString())
-          )
-        :null
-    ),
-    h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,margin:"0 20px 16px"}},
-      h("div",null,h("label",{style:S.lbl},"焙煎日"),h("input",{style:Object.assign({},S.inp,{colorScheme:"dark"}),type:"date",value:form.roastedAt,onChange:function(e){setForm(function(f){return Object.assign({},f,{roastedAt:e.target.value});});}})),
-      h("div",null,h("label",{style:S.lbl},"購入日"),h("input",{style:Object.assign({},S.inp,{colorScheme:"dark"}),type:"date",value:form.purchasedAt,onChange:function(e){setForm(function(f){return Object.assign({},f,{purchasedAt:e.target.value});});}}))
-    ),
-    h("div",{style:{margin:"0 20px 16px"}},h("label",{style:S.lbl},"メモ・フレーバーノート"),h("textarea",{style:Object.assign({},S.inp,{height:80,resize:"none"}),placeholder:"フルーティ、花のような香り…",value:form.notes,onChange:function(e){setForm(function(f){return Object.assign({},f,{notes:e.target.value});});}})),
-    h("button",{style:S.primaryBtn,onClick:addBean},"追加する")
+  // ── ローディング ──
+  if(loading) return h("div",{style:{background:C.bg,minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}},
+    h("div",{style:{fontSize:48}},"☕"),
+    h("div",{style:{color:C.gold,fontSize:16,letterSpacing:2}},"読み込み中...")
   );
 
-  // ── DETAIL VIEW ──
-  // ── EDIT VIEW ──
-  if(view==="detail"&&selected&&editing&&editForm){
-    var ef=editForm;
-    return h("div",{style:S.modal},
-      h("div",{style:S.mHead},
-        h("button",{style:S.back,onClick:function(){setEditing(false);setEditForm(null);}},"← キャンセル"),
-        h("span",{style:S.mTitle},"編集")
+  // ── フォーム共通パーツ ──
+  function renderForm(f, setF, fileR, onSave, title, onCancel){
+    return h("div",{style:{position:"fixed",inset:0,background:C.bg,zIndex:200,overflowY:"auto"}},
+      h("div",{style:mHead},
+        h("button",{style:backBtn,onClick:onCancel},"← キャンセル"),
+        h("span",{style:{fontSize:18,fontWeight:700,color:C.gold,flex:1}},title)
       ),
-      h("div",{style:S.photoArea,onClick:function(){editFileRef.current.click();}},
-        ef.photo
-          ?h("img",{src:ef.photo,alt:"",style:{width:"100%",height:180,objectFit:"cover",display:"block"}})
+      // 写真
+      h("div",{style:{margin:"0 20px 16px",borderRadius:12,overflow:"hidden",border:"2px dashed "+C.bg3,cursor:"pointer"},onClick:function(){fileR.current.click();}},
+        f.photo
+          ?h("img",{src:f.photo,alt:"",style:{width:"100%",height:180,objectFit:"cover",display:"block"}})
           :h("div",{style:{height:140,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",color:"#4B3C30"}},
               h("span",{style:{fontSize:40}},"📷"),
-              h("span",{style:{fontSize:13,marginTop:8}},"タップして写真を変更")
+              h("span",{style:{fontSize:13,marginTop:8}},"写真を選択（カメラ/ライブラリ）")
             ),
-        h("input",{ref:editFileRef,type:"file",accept:"image/*",style:{display:"none"},onChange:function(e){
-          var f2=e.target.files[0]; if(!f2) return;
-          var r=new FileReader(); r.onload=function(ev){setEditForm(function(f){return Object.assign({},f,{photo:ev.target.result});});}; r.readAsDataURL(f2);
+        h("input",{ref:fileR,type:"file",accept:"image/*",style:{display:"none"},onChange:function(e){
+          var file=e.target.files[0]; if(!file) return;
+          var r=new FileReader(); r.onload=function(ev){setF(Object.assign({},f,{photo:ev.target.result}));}; r.readAsDataURL(file);
         }})
       ),
-      h("div",{style:{margin:"0 20px 16px"}},h("label",{style:S.lbl},"豆の名前 *"),h("input",{style:S.inp,value:ef.name,onChange:function(e){setEditForm(function(f){return Object.assign({},f,{name:e.target.value});});}})),
-      h("div",{style:{margin:"0 20px 16px"}},h("label",{style:S.lbl},"産地"),h("input",{style:S.inp,value:ef.origin||"",onChange:function(e){setEditForm(function(f){return Object.assign({},f,{origin:e.target.value});});}})),
-      h("div",{style:{margin:"0 20px 16px"}},h("label",{style:S.lbl},"ロースター / 購入先"),h("input",{style:S.inp,value:ef.roaster||"",onChange:function(e){setEditForm(function(f){return Object.assign({},f,{roaster:e.target.value});});}})),
-      h("div",{style:{margin:"0 20px 16px"}},h("label",{style:S.lbl},"焙煎度"),h("select",{style:S.sel,value:ef.roastLevel,onChange:function(e){setEditForm(function(f){return Object.assign({},f,{roastLevel:e.target.value});})}},ROAST_LEVELS.map(function(r){return h("option",{key:r},r);}))),
-      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,margin:"0 20px 16px"}},
-        h("div",null,h("label",{style:S.lbl},"残量 (g)"),h("input",{style:S.inp,type:"number",value:ef.grams,onChange:function(e){setEditForm(function(f){return Object.assign({},f,{grams:e.target.value});});}})),
-        h("div",null,h("label",{style:S.lbl},"購入量 (g)"),h("input",{style:S.inp,type:"number",value:ef.maxGrams||"",onChange:function(e){setEditForm(function(f){return Object.assign({},f,{maxGrams:e.target.value});});}}))
-      ),
-      h("div",{style:{margin:"0 20px 16px",background:"#1A0E08",borderRadius:12,padding:"14px",border:"1px solid #3C2C1C"}},
-        h("div",{style:{fontSize:11,color:"#D4A96A",letterSpacing:2,textTransform:"uppercase",marginBottom:12}},"💰 価格"),
-        h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}},
-          h("div",null,h("label",{style:S.lbl},"購入価格 (円)"),h("input",{style:S.inp,type:"number",value:ef.price||"",onChange:function(e){setEditForm(function(f){return Object.assign({},f,{price:e.target.value});});}})),
-          h("div",null,h("label",{style:S.lbl},"単価 (円/100g)"),h("input",{style:Object.assign({},S.inp,{color:"#D4A96A"}),type:"number",value:ef.pricePerKg||"",onChange:function(e){setEditForm(function(f){return Object.assign({},f,{pricePerKg:e.target.value});});}}))
+      // 基本情報
+      h("div",{style:{margin:"0 20px 16px"}},h("label",{style:lbl},"豆の名前 *"),h("input",{style:inp,placeholder:"例: エチオピア イルガチェフェ",value:f.name,onChange:function(e){setF(Object.assign({},f,{name:e.target.value}));}})),
+      h("div",{style:{margin:"0 20px 16px"}},h("label",{style:lbl},"産地"),h("input",{style:inp,placeholder:"例: エチオピア",value:f.origin||"",onChange:function(e){setF(Object.assign({},f,{origin:e.target.value}));}})),
+      h("div",{style:{margin:"0 20px 16px"}},h("label",{style:lbl},"ロースター / 購入先"),h("input",{style:inp,placeholder:"例: Nonstop Coffee",value:f.roaster||"",onChange:function(e){setF(Object.assign({},f,{roaster:e.target.value}));}})),
+      h("div",{style:{margin:"0 20px 16px"}},h("label",{style:lbl},"焙煎度"),
+        h("select",{style:sel,value:f.roastLevel,onChange:function(e){setF(Object.assign({},f,{roastLevel:e.target.value}));}},
+          ROAST_LEVELS.map(function(r){return h("option",{key:r},r);})
         )
       ),
+      // 残量
       h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,margin:"0 20px 16px"}},
-        h("div",null,h("label",{style:S.lbl},"焙煎日"),h("input",{style:Object.assign({},S.inp,{colorScheme:"dark"}),type:"date",value:ef.roastedAt||"",onChange:function(e){setEditForm(function(f){return Object.assign({},f,{roastedAt:e.target.value});});}})),
-        h("div",null,h("label",{style:S.lbl},"購入日"),h("input",{style:Object.assign({},S.inp,{colorScheme:"dark"}),type:"date",value:ef.purchasedAt||"",onChange:function(e){setEditForm(function(f){return Object.assign({},f,{purchasedAt:e.target.value});});}}))
+        h("div",null,h("label",{style:lbl},"残量 (g) *"),h("input",{style:inp,type:"number",placeholder:"200",value:f.grams,onChange:function(e){setGrams("grams",e.target.value,f,setF);}})),
+        h("div",null,h("label",{style:lbl},"購入量 (g)"),h("input",{style:inp,type:"number",placeholder:"200",value:f.maxGrams||"",onChange:function(e){setGrams("maxGrams",e.target.value,f,setF);}}))
       ),
-      h("div",{style:{margin:"0 20px 16px"}},h("label",{style:S.lbl},"メモ・フレーバーノート"),h("textarea",{style:Object.assign({},S.inp,{height:80,resize:"none"}),value:ef.notes||"",onChange:function(e){setEditForm(function(f){return Object.assign({},f,{notes:e.target.value});});}})),
-      h("button",{style:S.primaryBtn,onClick:saveEdit},"保存する")
+      // 価格
+      h("div",{style:{margin:"0 20px 16px",background:C.bg4,borderRadius:12,padding:"14px",border:"1px solid #3C2C1C"}},
+        h("div",{style:{fontSize:11,color:C.gold,letterSpacing:2,textTransform:"uppercase",marginBottom:12}},"💰 価格"),
+        h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:f.price&&(Number(f.maxGrams)||Number(f.grams))?10:0}},
+          h("div",null,h("label",{style:lbl},"購入価格 (円)"),h("input",{style:inp,type:"number",placeholder:"1500",value:f.price||"",onChange:function(e){setPrice(e.target.value,f,setF);}})),
+          h("div",null,h("label",{style:lbl},"単価 (円/100g)"),h("input",{style:Object.assign({},inp,{color:C.gold}),type:"number",placeholder:"自動計算",value:f.pricePerKg||"",onChange:function(e){setF(Object.assign({},f,{pricePerKg:e.target.value}));}}))
+        ),
+        f.price&&(Number(f.maxGrams)||Number(f.grams))&&h("div",{style:{fontSize:12,color:C.muted,background:C.bg2,borderRadius:8,padding:"8px 12px",display:"flex",justifyContent:"space-between",marginTop:10}},
+          h("span",null,"100g = ¥"+Math.round(Number(f.price)/(Number(f.maxGrams)||Number(f.grams))*100).toLocaleString()),
+          budget.monthly>0&&h("span",{style:{color:Number(f.price)+thisSpend>budget.monthly?C.red:C.green}},"残予算 ¥"+Math.max(0,budget.monthly-thisSpend).toLocaleString())
+        )
+      ),
+      // 日付
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,margin:"0 20px 16px"}},
+        h("div",null,h("label",{style:lbl},"焙煎日"),h("input",{style:Object.assign({},inp,{colorScheme:"dark"}),type:"date",value:f.roastedAt||"",onChange:function(e){setF(Object.assign({},f,{roastedAt:e.target.value}));}})),
+        h("div",null,h("label",{style:lbl},"購入日"),h("input",{style:Object.assign({},inp,{colorScheme:"dark"}),type:"date",value:f.purchasedAt||"",onChange:function(e){setF(Object.assign({},f,{purchasedAt:e.target.value}));}}))
+      ),
+      // メモ
+      h("div",{style:{margin:"0 20px 16px"}},h("label",{style:lbl},"メモ・フレーバーノート"),h("textarea",{style:Object.assign({},inp,{height:80,resize:"none"}),placeholder:"フルーティ、花のような香り…",value:f.notes||"",onChange:function(e){setF(Object.assign({},f,{notes:e.target.value}));}})),
+      h("button",{style:primaryBtn,onClick:onSave},title==="追加"?"追加する":"保存する")
     );
   }
 
-  if(view==="detail"&&selected){
-    var bean=beans.find(function(b){return b.id===selected.id;})||selected;
-    var php=bean.price&&bean.maxGrams?Math.round((bean.price/bean.maxGrams)*100):null;
+  // ── 追加画面 ──
+  if(view==="add") return renderForm(form, setForm, fileRef, addBean, "追加", function(){setView("list");setForm(emptyForm);});
+
+  // ── 編集画面 ──
+  if(view==="edit"&&editForm) return renderForm(editForm, setEditForm, editFileRef, saveEdit, "編集", function(){setView("detail");setEditForm(null);});
+
+  // ── 詳細画面 ──
+  if(view==="detail"&&sel){
+    var bean=beans.find(function(b){return b.id===sel.id;})||sel;
+    var php=bean.price&&bean.maxGrams?Math.round(bean.price/bean.maxGrams*100):null;
     var rv=bean.price&&bean.maxGrams?Math.round(bean.price*(bean.grams/bean.maxGrams)):null;
-    return h("div",{style:S.modal},
-      h("div",{style:S.mHead},h("button",{style:S.back,onClick:function(){setView("list");}},"← 戻る"),h("span",{style:S.mTitle},"詳細"),h("button",{style:{background:"none",border:"1px solid #3C3028",borderRadius:8,color:"#D4A96A",padding:"6px 14px",fontSize:13,fontFamily:"inherit",cursor:"pointer"},onClick:function(){setEditForm(Object.assign({},bean));setEditing(true);}},"編集")),
+    return h("div",{style:{position:"fixed",inset:0,background:C.bg,zIndex:200,overflowY:"auto"}},
+      h("div",{style:mHead},
+        h("button",{style:backBtn,onClick:function(){setView("list");}},"← 戻る"),
+        h("span",{style:{fontSize:18,fontWeight:700,color:C.gold,flex:1}},"詳細"),
+        h("button",{style:{background:"none",border:"1px solid #3C3028",borderRadius:8,color:C.gold,padding:"6px 14px",fontSize:13,fontFamily:"inherit",cursor:"pointer"},onClick:function(){setEditForm(Object.assign({},bean));setView("edit");}},"編集")
+      ),
       bean.photo
         ?h("img",{src:bean.photo,alt:bean.name,style:{width:"100%",height:220,objectFit:"cover"}})
-        :h("div",{style:{width:"100%",height:140,background:"#211510",display:"flex",alignItems:"center",justifyContent:"center",fontSize:60}},"☕"),
+        :h("div",{style:{width:"100%",height:120,background:C.bg2,display:"flex",alignItems:"center",justifyContent:"center",fontSize:60}},"☕"),
       h("div",{style:{padding:"16px 20px"}},
         h("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:4}},
-          h("span",{style:S.roastDot(bean.roastLevel)}),
-          h("span",{style:{fontSize:12,color:"#9B8E82"}},bean.roastLevel+"ロースト")
+          h("span",{style:{display:"inline-block",width:8,height:8,borderRadius:"50%",background:ROAST_COLORS[bean.roastLevel]||"#888"}}),
+          h("span",{style:{fontSize:12,color:C.muted}},bean.roastLevel+"ロースト")
         ),
-        h("div",{style:{fontSize:24,fontWeight:700,color:"#E8DDD4",marginBottom:4}},bean.name),
-        h("div",{style:{fontSize:13,color:"#9B8E82",marginBottom:16}},bean.roaster+(bean.origin?" · "+bean.origin:"")),
-        h(GramsBar,{grams:bean.grams,maxGrams:bean.maxGrams}),
-        bean.roastedAt&&h(FreshnessBar,{roastedAt:bean.roastedAt}),
+        h("div",{style:{fontSize:24,fontWeight:700,marginBottom:4}},bean.name),
+        h("div",{style:{fontSize:13,color:C.muted,marginBottom:16}},bean.roaster+(bean.origin?" · "+bean.origin:"")),
+        h(GramsBar,{g:bean.grams,max:bean.maxGrams}),
+        bean.roastedAt&&h(FreshnessBar,{r:bean.roastedAt}),
+        // 情報グリッド
         h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginTop:16}},
-          bean.roastedAt&&h("div",{style:S.box},h("div",{style:S.boxLbl},"焙煎日"),h("div",{style:Object.assign({},S.boxVal,{fontSize:14})},formatDate(bean.roastedAt))),
-          bean.purchasedAt&&h("div",{style:S.box},h("div",{style:S.boxLbl},"購入日"),h("div",{style:Object.assign({},S.boxVal,{fontSize:14})},formatDate(bean.purchasedAt))),
-          bean.price&&h("div",{style:S.box},h("div",{style:S.boxLbl},"購入価格"),h("div",{style:S.boxVal},"¥"+Number(bean.price).toLocaleString())),
-          h("div",{style:S.box},h("div",{style:S.boxLbl},"残量"),h("div",{style:S.boxVal},bean.grams+"g"))
+          bean.roastedAt&&h("div",{style:box},h("div",{style:{fontSize:10,color:C.dim,letterSpacing:2,textTransform:"uppercase",marginBottom:4}},"焙煎日"),h("div",{style:{fontSize:14,fontWeight:600}},fmtDate(bean.roastedAt))),
+          bean.purchasedAt&&h("div",{style:box},h("div",{style:{fontSize:10,color:C.dim,letterSpacing:2,textTransform:"uppercase",marginBottom:4}},"購入日"),h("div",{style:{fontSize:14,fontWeight:600}},fmtDate(bean.purchasedAt))),
+          bean.price&&h("div",{style:box},h("div",{style:{fontSize:10,color:C.dim,letterSpacing:2,textTransform:"uppercase",marginBottom:4}},"購入価格"),h("div",{style:{fontSize:16,fontWeight:600}},"¥"+Number(bean.price).toLocaleString())),
+          h("div",{style:box},h("div",{style:{fontSize:10,color:C.dim,letterSpacing:2,textTransform:"uppercase",marginBottom:4}},"残量"),h("div",{style:{fontSize:16,fontWeight:600}},bean.grams+"g"))
         ),
-        bean.price&&h("div",{style:{background:"#1A0E08",borderRadius:12,padding:"14px",border:"1px solid #3C2C1C",marginTop:12}},
-          h("div",{style:{fontSize:11,color:"#D4A96A",letterSpacing:2,textTransform:"uppercase",marginBottom:10}},"💰 価格詳細"),
+        // 価格詳細
+        bean.price&&h("div",{style:{background:C.bg4,borderRadius:12,padding:"14px",border:"1px solid #3C2C1C",marginTop:12}},
+          h("div",{style:{fontSize:11,color:C.gold,letterSpacing:2,textTransform:"uppercase",marginBottom:10}},"💰 価格詳細"),
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}},
-            php&&h("div",{style:S.box},h("div",{style:S.boxLbl},"100gあたり"),h("div",{style:Object.assign({},S.boxVal,{color:"#D4A96A"})},"¥"+php.toLocaleString())),
-            rv!==null&&h("div",{style:S.box},h("div",{style:S.boxLbl},"残量の価値"),h("div",{style:Object.assign({},S.boxVal,{color:"#8FBE8A"})},"¥"+rv.toLocaleString()))
+            php&&h("div",{style:box},h("div",{style:{fontSize:10,color:C.dim,letterSpacing:2,textTransform:"uppercase",marginBottom:4}},"100gあたり"),h("div",{style:{fontSize:16,fontWeight:600,color:C.gold}},"¥"+php.toLocaleString())),
+            rv!=null&&h("div",{style:box},h("div",{style:{fontSize:10,color:C.dim,letterSpacing:2,textTransform:"uppercase",marginBottom:4}},"残量の価値"),h("div",{style:{fontSize:16,fontWeight:600,color:C.green}},"¥"+rv.toLocaleString()))
           )
         ),
-        bean.notes&&h("div",{style:{background:"#211510",borderRadius:10,padding:"12px 14px",border:"1px solid #2C2118",marginTop:12,fontSize:14,color:"#C4B5A8",lineHeight:1.7}},bean.notes),
-        h("div",{style:{background:"#211510",borderRadius:12,padding:"14px",border:"1px solid #2C2118",marginTop:12}},
-          h("div",{style:{fontSize:13,color:"#9B8E82",marginBottom:8}},"使用量を記録"),
+        // メモ
+        bean.notes&&h("div",{style:{background:C.bg2,borderRadius:10,padding:"12px 14px",border:"1px solid "+C.bg3,marginTop:12,fontSize:14,color:"#C4B5A8",lineHeight:1.7}},bean.notes),
+        // 使用記録
+        h("div",{style:{background:C.bg2,borderRadius:12,padding:"14px",border:"1px solid "+C.bg3,marginTop:12}},
+          h("div",{style:{fontSize:13,color:C.muted,marginBottom:8}},"使用量を記録"),
           h("div",{style:{display:"flex",gap:10}},
-            h("input",{style:Object.assign({},S.inp,{flex:1}),type:"number",placeholder:"g",value:consumeAmt,onChange:function(e){setConsumeAmt(e.target.value);}}),
-            h("button",{onClick:consume,style:{background:"#D4A96A",color:"#1A120B",border:"none",borderRadius:10,padding:"10px 20px",fontWeight:700,fontSize:15,fontFamily:"inherit",cursor:"pointer"}},"記録")
+            h("input",{style:Object.assign({},inp,{flex:1}),type:"number",placeholder:"g",value:consume,onChange:function(e){setConsume(e.target.value);}}),
+            h("button",{onClick:recordConsume,style:{background:C.gold,color:"#1A120B",border:"none",borderRadius:10,padding:"10px 20px",fontWeight:700,fontSize:15,fontFamily:"inherit",cursor:"pointer"}},"記録")
           ),
           h("div",{style:{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}},
             [10,15,18,20,30].map(function(g){
-              return h("button",{key:g,onClick:function(){setConsumeAmt(String(g));},style:{background:Number(consumeAmt)===g?"#D4A96A":"#2C2118",color:Number(consumeAmt)===g?"#1A120B":"#9B8E82",border:"none",borderRadius:20,padding:"5px 14px",fontSize:12,fontFamily:"inherit",cursor:"pointer"}},g+"g");
+              return h("button",{key:g,onClick:function(){setConsume(String(g));},style:{background:Number(consume)===g?C.gold:C.bg3,color:Number(consume)===g?"#1A120B":C.muted,border:"none",borderRadius:20,padding:"5px 14px",fontSize:12,fontFamily:"inherit",cursor:"pointer"}},g+"g");
             })
           ),
-          consumeAmt&&php&&h("div",{style:{fontSize:12,color:"#9B8E82",marginTop:8}},"≈ ¥"+Math.round(php*Number(consumeAmt)/100).toLocaleString()+" 相当")
+          consume&&php&&h("div",{style:{fontSize:12,color:C.muted,marginTop:8}},"≈ ¥"+Math.round(php*Number(consume)/100).toLocaleString()+" 相当")
         ),
+        // 使用履歴
         bean.log&&bean.log.length>0&&h("div",{style:{marginTop:16}},
-          h("div",{style:{fontSize:11,color:"#6B5A4E",letterSpacing:2,textTransform:"uppercase",marginBottom:8}},"使用履歴"),
+          h("div",{style:{fontSize:11,color:C.dim,letterSpacing:2,textTransform:"uppercase",marginBottom:8}},"使用履歴"),
           bean.log.slice().reverse().slice(0,8).map(function(l,i){
-            return h("div",{key:i,style:S.logItem},
-              h("span",{style:{color:"#9B8E82"}},formatDate(l.date)),
-              h("span",{style:{color:l.amount<0?"#D4A96A":"#8FBE8A"}},l.action+" "+Math.abs(l.amount)+"g")
+            return h("div",{key:i,style:{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid "+C.bg3,fontSize:13}},
+              h("span",{style:{color:C.muted}},fmtDate(l.date)),
+              h("span",{style:{color:l.amount<0?C.gold:C.green}},l.action+" "+Math.abs(l.amount)+"g")
             );
           })
         )
       ),
-      h("button",{style:S.dangerBtn,onClick:function(){deleteBean(bean.id);}},"この豆を削除する")
+      h("button",{style:dangerBtn,onClick:function(){deleteBean(bean.id);}},"この豆を削除する")
     );
   }
 
-  // ── LIST VIEW ──
-  var budgetBarColor=budgetOver?"#E07060":budgetAlert?"#D4A96A":"#8FBE8A";
-  return h("div",{style:S.app},
-    h("div",{style:{background:"linear-gradient(180deg,#0D0805 0%,#1A120B 100%)",padding:"20px 20px 0",borderBottom:"1px solid #2C2118"}},
+  // ── 予算画面 ──
+  if(view==="budget"){
+    var thisMonthBeans=beans.filter(function(b){return b.purchasedAt&&b.purchasedAt.indexOf(thisMonth)===0&&b.price;});
+    var validM=monthHistory.filter(function(x){return x.spend>0;});
+    var avgSpend=validM.length>0?Math.round(validM.reduce(function(s,x){return s+x.spend;},0)/validM.length):0;
+    return h("div",{style:{position:"fixed",inset:0,background:C.bg,zIndex:200,overflowY:"auto"}},
+      h("div",{style:mHead},h("button",{style:backBtn,onClick:function(){setView("list");}},"← 戻る"),h("span",{style:{fontSize:18,fontWeight:700,color:C.gold,flex:1}},"予算管理")),
+      // 今月
+      h("div",{style:{margin:"16px 20px",background:bOver?"#2C1510":bAlert?"#21180A":C.bg2,borderRadius:14,padding:"18px",border:"1px solid "+(bOver?"#5C2518":bAlert?"#5C4018":C.bg3)}},
+        h("div",{style:{fontSize:12,color:C.muted,marginBottom:4}},fmtMonth(thisMonth)+"の支出"),
+        h("div",{style:{fontSize:36,fontWeight:700,color:bOver?C.red:bAlert?C.gold:C.text}},"¥"+thisSpend.toLocaleString()),
+        budget.monthly>0?h("div",null,
+          h("div",{style:{fontSize:13,color:C.muted,marginTop:6}},"予算 ¥"+budget.monthly.toLocaleString()+" に対して "+bPct.toFixed(0)+"% 使用"+(bOver?" ⚠ 超過":bAlert?" ⚠ アラート":"")),
+          h("div",{style:{height:8,background:C.bg3,borderRadius:4,overflow:"hidden",marginTop:10}},
+            h("div",{style:{width:bPct+"%",height:"100%",background:bOver?C.red:bAlert?C.gold:C.green,borderRadius:4}})
+          ),
+          h("div",{style:{display:"flex",justifyContent:"space-between",fontSize:12,color:C.dim,marginTop:6}},
+            h("span",null,"残り ¥"+Math.max(0,budget.monthly-thisSpend).toLocaleString()),
+            avgSpend>0&&h("span",null,"平均 ¥"+avgSpend.toLocaleString()+"/月")
+          )
+        ):h("div",{style:{fontSize:13,color:C.dim,marginTop:8}},"下の設定から月額予算を登録できます")
+      ),
+      // グラフ
+      h("div",{style:{margin:"0 20px 16px",background:C.bg2,borderRadius:14,padding:"16px",border:"1px solid "+C.bg3}},
+        h("div",{style:{fontSize:11,color:C.dim,letterSpacing:2,textTransform:"uppercase",marginBottom:14}},"過去6ヶ月の支出"),
+        h("div",{style:{display:"flex",alignItems:"flex-end",gap:6,height:110,position:"relative"}},
+          budget.monthly>0&&h("div",{style:{position:"absolute",left:0,right:0,bottom:budget.monthly/maxH*100+"%",borderTop:"1px dashed #5C4018",pointerEvents:"none"}},
+            h("span",{style:{fontSize:9,color:"#5C4018",position:"absolute",right:0,top:-12}},"予算")
+          ),
+          monthHistory.map(function(item){
+            var isThis=item.m===thisMonth;
+            var over=budget.monthly>0&&item.spend>budget.monthly;
+            var bc=over?C.red:isThis?C.gold:"#4A3525";
+            var pct=item.spend/maxH*100;
+            return h("div",{key:item.m,style:{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4,height:"100%"}},
+              h("div",{style:{flex:1,width:"100%",display:"flex",alignItems:"flex-end"}},
+                h("div",{style:{width:"100%",height:Math.max(item.spend>0?6:2,pct)+"%",background:bc,borderRadius:"3px 3px 0 0"}})
+              ),
+              item.spend>0&&h("div",{style:{fontSize:9,color:isThis?C.gold:C.muted,textAlign:"center"}},"¥"+(item.spend>=1000?(item.spend/1000).toFixed(1)+"k":item.spend)),
+              h("div",{style:{fontSize:9,color:isThis?C.gold:C.dim,fontWeight:isThis?700:400}},item.m.slice(5)+"月")
+            );
+          })
+        )
+      ),
+      // 今月購入リスト
+      thisMonthBeans.length>0&&h("div",{style:{margin:"0 20px 16px",background:C.bg2,borderRadius:14,padding:"16px",border:"1px solid "+C.bg3}},
+        h("div",{style:{fontSize:11,color:C.dim,letterSpacing:2,textTransform:"uppercase",marginBottom:12}},"今月の購入 ("+thisMonthBeans.length+"点)"),
+        thisMonthBeans.map(function(b){
+          return h("div",{key:b.id,style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid "+C.bg3}},
+            h("div",null,
+              h("div",{style:{fontSize:14}},b.name),
+              h("div",{style:{fontSize:11,color:C.dim}},(b.maxGrams||b.grams)+"g"+(b.pricePerKg?" · ¥"+b.pricePerKg+"/100g":"")+" · "+fmtDate(b.purchasedAt))
+            ),
+            h("div",{style:{fontSize:16,fontWeight:700,color:C.gold,flexShrink:0,marginLeft:12}},"¥"+Number(b.price).toLocaleString())
+          );
+        })
+      ),
+      // 予算設定
+      h("div",{style:{margin:"0 20px 16px",background:C.bg2,borderRadius:14,padding:"16px",border:"1px solid "+C.bg3}},
+        h("div",{style:{fontSize:11,color:C.dim,letterSpacing:2,textTransform:"uppercase",marginBottom:14}},"予算設定"),
+        h("div",{style:{marginBottom:16}},h("label",{style:lbl},"月額予算 (円)"),h("input",{style:inp,type:"number",placeholder:"例: 5000",value:bf.monthly,onChange:function(e){setBf(Object.assign({},bf,{monthly:e.target.value}));}})),
+        h("div",null,h("label",{style:lbl},"アラートタイミング"),
+          h("div",{style:{display:"flex",gap:8}},
+            [60,70,80,90].map(function(v){return h("button",{key:v,style:Object.assign({},chip(String(bf.alert)===String(v)),{flex:1}),onClick:function(){setBf(Object.assign({},bf,{alert:String(v)}));}},v+"%");})
+          )
+        )
+      ),
+      h("button",{style:primaryBtn,onClick:function(){saveBudgetData({monthly:Number(bf.monthly)||0,alert:Number(bf.alert)||80});setView("list");showMsg("予算を保存しました");}},"保存する")
+    );
+  }
+
+  // ── 一覧画面 ──
+  var bBarColor=bOver?C.red:bAlert?C.gold:C.green;
+  return h("div",{style:{background:C.bg,minHeight:"100vh",maxWidth:430,margin:"0 auto",paddingBottom:80}},
+    // ヘッダー
+    h("div",{style:{background:"linear-gradient(180deg,#0D0805,"+C.bg+")",padding:"20px 20px 0",borderBottom:"1px solid "+C.bg3}},
       h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
         h("div",null,
-          h("h1",{style:{fontSize:22,fontWeight:700,letterSpacing:2,color:"#D4A96A",margin:0}},"Coffee Cellar"),
-          h("div",{style:{fontSize:11,color:"#6B5A4E",letterSpacing:3,textTransform:"uppercase",marginTop:2}},"Bean Inventory")
+          h("h1",{style:{fontSize:22,fontWeight:700,letterSpacing:2,color:C.gold,margin:0}},"Coffee Cellar"),
+          h("div",{style:{fontSize:11,color:C.dim,letterSpacing:3,textTransform:"uppercase",marginTop:2}},syncing?"⟳ 同期中...":"Bean Inventory")
         ),
-        h("button",{onClick:function(){setBudgetForm({monthly:String(budget.monthly||""),alert:String(budget.alert||80)});setView("budget");},style:{background:budgetOver?"#2C1510":budgetAlert?"#21180A":"#211510",border:"1px solid "+(budgetOver?"#5C2518":budgetAlert?"#5C4018":"#3C3028"),borderRadius:12,padding:"8px 14px",cursor:"pointer",textAlign:"right"}},
-          h("div",{style:{fontSize:10,color:"#6B5A4E",textTransform:"uppercase",letterSpacing:1}},"今月支出"),
-          h("div",{style:{fontSize:18,fontWeight:700,color:budgetOver?"#E07060":budgetAlert?"#D4A96A":"#E8DDD4"}},"¥"+thisMonthSpend.toLocaleString()),
-          budget.monthly>0
-            ?h("div",{style:{fontSize:10,color:budgetOver?"#E07060":"#9B8E82"}},"/ ¥"+budget.monthly.toLocaleString())
-            :h("div",{style:{fontSize:10,color:"#4B3C30"}},"予算を設定 →")
+        h("button",{onClick:function(){setBf({monthly:String(budget.monthly||""),alert:String(budget.alert||80)});setView("budget");},style:{background:bOver?"#2C1510":bAlert?"#21180A":C.bg2,border:"1px solid "+(bOver?"#5C2518":bAlert?"#5C4018":"#3C3028"),borderRadius:12,padding:"8px 14px",cursor:"pointer",textAlign:"right"}},
+          h("div",{style:{fontSize:10,color:C.dim,textTransform:"uppercase",letterSpacing:1}},"今月支出"),
+          h("div",{style:{fontSize:18,fontWeight:700,color:bOver?C.red:bAlert?C.gold:C.text}},"¥"+thisSpend.toLocaleString()),
+          budget.monthly>0?h("div",{style:{fontSize:10,color:bOver?C.red:C.muted}},"/ ¥"+budget.monthly.toLocaleString()):h("div",{style:{fontSize:10,color:"#4B3C30"}},"予算を設定 →")
         )
       ),
-      budget.monthly>0&&h("div",{style:{margin:"10px 0 0"}},
-        h("div",{style:{height:3,background:"#2C2118",borderRadius:2,overflow:"hidden"}},
-          h("div",{style:{width:budgetPct+"%",height:"100%",background:budgetBarColor,borderRadius:2}})
-        )
+      budget.monthly>0&&h("div",{style:{margin:"8px 0 0"}},
+        h("div",{style:{height:3,background:C.bg3,borderRadius:2,overflow:"hidden"}},h("div",{style:{width:bPct+"%",height:"100%",background:bBarColor,borderRadius:2}}))
       ),
-      h("div",{style:{display:"flex",gap:16,margin:"10px 0 10px",fontSize:12,color:"#9B8E82"}},
-        h("span",null,beans.length+"種類 · "+totalGrams+"g"),
-        totalValue>0&&h("span",null,"在庫価値 ¥"+totalValue.toLocaleString())
+      h("div",{style:{display:"flex",gap:16,margin:"10px 0 10px",fontSize:12,color:C.muted}},
+        h("span",null,beans.length+"種類 · "+totalG+"g"),
+        totalV>0&&h("span",null,"在庫価値 ¥"+totalV.toLocaleString())
       ),
+      // バックアップボタン
       h("div",{style:{display:"flex",gap:8,marginBottom:12}},
-        h("button",{onClick:exportData,style:{flex:1,background:"#2C2118",color:"#D4A96A",border:"1px solid #3C3028",borderRadius:10,padding:"8px",fontSize:12,fontFamily:"inherit",cursor:"pointer"}},"⬇ バックアップ保存"),
-        h("button",{onClick:function(){importRef.current.click();},style:{flex:1,background:"#2C2118",color:"#9B8E82",border:"1px solid #3C3028",borderRadius:10,padding:"8px",fontSize:12,fontFamily:"inherit",cursor:"pointer"}},"⬆ バックアップ復元"),
-        h("input",{ref:importRef,type:"file",accept:".json",style:{display:"none"},onChange:importData})
+        h("button",{onClick:doExport,style:{flex:1,background:C.bg3,color:C.gold,border:"1px solid #3C3028",borderRadius:10,padding:"8px",fontSize:12,fontFamily:"inherit",cursor:"pointer"}},"⬇ バックアップ保存"),
+        h("button",{onClick:function(){importRef.current.click();},style:{flex:1,background:C.bg3,color:C.muted,border:"1px solid #3C3028",borderRadius:10,padding:"8px",fontSize:12,fontFamily:"inherit",cursor:"pointer"}},"⬆ バックアップ復元"),
+        h("input",{ref:importRef,type:"file",accept:".json",style:{display:"none"},onChange:doImport})
       ),
-      h("div",{style:{display:"flex",gap:8,overflowX:"auto",padding:"0 0 12px",scrollbarWidth:"none"}},
-        ["all"].concat(ROAST_LEVELS).map(function(r){return h("button",{key:r,style:S.chip(filterRoast===r),onClick:function(){setFilterRoast(r);}},r==="all"?"すべて":r);})
+      // フィルター
+      h("div",{style:{display:"flex",gap:8,overflowX:"auto",padding:"0 0 12px"}},
+        ["all"].concat(ROAST_LEVELS).map(function(r){return h("button",{key:r,style:chip(filterRoast===r),onClick:function(){setFilterRoast(r);}},r==="all"?"すべて":r);})
       )
     ),
+    // 並び替え
     h("div",{style:{display:"flex",gap:6,padding:"8px 16px 4px",alignItems:"center"}},
-      h("span",{style:{fontSize:11,color:"#6B5A4E",marginRight:2}},"並び替え:"),
-      [["freshness","新鮮度"],["grams","残量"],["price","価格"],["name","名前"]].map(function(pair){
-        return h("button",{key:pair[0],style:Object.assign({},S.chip(sortBy===pair[0]),{padding:"4px 10px"}),onClick:function(){setSortBy(pair[0]);}},pair[1]);
+      h("span",{style:{fontSize:11,color:C.dim,marginRight:2}},"並び替え:"),
+      [["freshness","新鮮度"],["grams","残量"],["price","価格"],["name","名前"]].map(function(p){
+        return h("button",{key:p[0],style:Object.assign({},chip(sortBy===p[0]),{padding:"4px 10px"}),onClick:function(){setSortBy(p[0]);}},p[1]);
       })
     ),
+    // 空
     sorted.length===0&&h("div",{style:{textAlign:"center",padding:"60px 20px",color:"#4B3C30"}},
       h("div",{style:{fontSize:48,marginBottom:16}},"☕"),
       h("div",{style:{fontSize:16,marginBottom:8}},"豆がまだありません"),
       h("div",{style:{fontSize:13}},"右下の ＋ から追加しましょう")
     ),
+    // リスト
     sorted.map(function(bean){
-      return h("div",{key:bean.id,style:S.card,onClick:function(){setSelected(bean);setView("detail");}},
+      return h("div",{key:bean.id,style:{background:C.bg2,margin:"8px 16px",borderRadius:14,overflow:"hidden",border:"1px solid "+C.bg3,display:"flex",cursor:"pointer"},onClick:function(){setSel(bean);setView("detail");}},
         bean.photo
-          ?h("img",{src:bean.photo,alt:bean.name,style:S.cardImg})
-          :h("div",{style:S.cardImgPh},h("span",null,"☕")),
-        h("div",{style:S.cardBody},
+          ?h("img",{src:bean.photo,alt:bean.name,style:{width:90,minHeight:90,objectFit:"cover",flexShrink:0}})
+          :h("div",{style:{width:90,minHeight:90,background:C.bg3,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28}},"☕"),
+        h("div",{style:{padding:"12px 14px",flex:1,minWidth:0}},
           h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
             h("div",{style:{display:"flex",alignItems:"center",gap:6}},
-              h("span",{style:S.roastDot(bean.roastLevel)}),
-              h("span",{style:{fontSize:10,color:"#6B5A4E"}},bean.roastLevel)
+              h("span",{style:{display:"inline-block",width:8,height:8,borderRadius:"50%",background:ROAST_COLORS[bean.roastLevel]||"#888"}}),
+              h("span",{style:{fontSize:10,color:C.dim}},bean.roastLevel)
             ),
-            bean.price&&h("span",{style:{fontSize:12,color:"#D4A96A",fontWeight:600}},"¥"+Number(bean.price).toLocaleString())
+            bean.price&&h("span",{style:{fontSize:12,color:C.gold,fontWeight:600}},"¥"+Number(bean.price).toLocaleString())
           ),
-          h("div",{style:S.cardName},bean.name),
-          h("div",{style:S.cardMeta},bean.roaster+(bean.origin?" · "+bean.origin:"")+(bean.pricePerKg?" · ¥"+bean.pricePerKg+"/100g":"")),
-          h(GramsBar,{grams:bean.grams,maxGrams:bean.maxGrams}),
-          bean.roastedAt&&h(FreshnessBar,{roastedAt:bean.roastedAt})
+          h("div",{style:{fontSize:16,fontWeight:700,marginBottom:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}},bean.name),
+          h("div",{style:{fontSize:11,color:C.dim,marginBottom:4}},bean.roaster+(bean.origin?" · "+bean.origin:"")+(bean.pricePerKg?" · ¥"+bean.pricePerKg+"/100g":"")),
+          h(GramsBar,{g:bean.grams,max:bean.maxGrams}),
+          bean.roastedAt&&h(FreshnessBar,{r:bean.roastedAt})
         )
       );
     }),
-    h("button",{style:S.fab,onClick:function(){setView("add");}},"＋")
+    // FAB
+    h("button",{style:{position:"fixed",bottom:24,right:24,width:60,height:60,borderRadius:"50%",background:"linear-gradient(135deg,"+C.gold+","+C.brown+")",color:"#1A120B",fontSize:32,border:"none",cursor:"pointer",boxShadow:"0 4px 20px rgba(212,169,106,0.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100},onClick:function(){setView("add");}},"＋"),
+    // メッセージトースト
+    msg&&h("div",{style:{position:"fixed",bottom:100,left:"50%",transform:"translateX(-50%)",background:"#2C2118",color:C.gold,padding:"10px 20px",borderRadius:20,fontSize:14,boxShadow:"0 4px 20px rgba(0,0,0,0.4)",zIndex:300,whiteSpace:"nowrap"}},msg)
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
-  </script>
+ReactDOM.createRoot(document.getElementById("root")).render(h(App,null));
+</script>
 </body>
 </html>
